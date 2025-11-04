@@ -1,11 +1,25 @@
+param (
+    [ValidatePattern('^[c-zC-Z]$')][string]$ISO,
+    [switch]$NonInteractive,
+    [ValidateSet('Auto','Pro','Home','ProWorkstations')][string]$VersionSelector = 'Auto',
+    [ValidateSet('yes','no')][string]$RemoveDefender = 'no',
+    [ValidateSet('yes','no')][string]$RemoveAI = 'yes',
+    [ValidateSet('yes','no')][string]$RemoveEdge = 'yes',
+    [ValidateSet('yes','no')][string]$RemoveStore = 'yes'
+)
+
 if ((Get-ExecutionPolicy) -eq 'Restricted') {
-    Write-Host "Your current PowerShell Execution Policy is set to Restricted, which prevents scripts from running. Do you want to change it to RemoteSigned? (yes/no)"
-    $response = Read-Host
-    if ($response -eq 'yes') {
+    if ($NonInteractive) {
         Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false
     } else {
-        Write-Host "The script cannot be run without changing the execution policy. Exiting..."
-        exit
+        Write-Host "Your current PowerShell Execution Policy is set to Restricted, which prevents scripts from running. Do you want to change it to RemoteSigned? (yes/no)"
+        $response = Read-Host
+        if ($response -eq 'yes') {
+            Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false
+        } else {
+            Write-Host "The script cannot be run without changing the execution policy. Exiting..."
+            exit
+        }
     }
 }
 
@@ -28,10 +42,12 @@ Start-Transcript -Path "$PSScriptRoot\tiny11.log"
 # Ask the user for input
 Write-Host "Welcome to tiny11 core builder! BETA 09-05-25"
 Write-Host "This script generates a significantly reduced Windows 11 image. However, it's not suitable for regular use due to its lack of serviceability - you can't add languages, updates, or features post-creation. tiny11 Core is not a full Windows 11 substitute but a rapid testing or development tool, potentially useful for VM environments."
+if (-not $NonInteractive) {
 Write-Host "Do you want to continue? (y/n)"
 $input = Read-Host
+}
 
-if ($input -eq 'y') {
+if ($NonInteractive -or $input -eq 'y') {
     Write-Host "Off we go..."
 Start-Sleep -Seconds 3
 Clear-Host
@@ -39,14 +55,33 @@ Clear-Host
 $mainOSDrive = $env:SystemDrive
 $hostArchitecture = $Env:PROCESSOR_ARCHITECTURE
 New-Item -ItemType Directory -Force -Path "$mainOSDrive\tiny11\sources" >null
-$DriveLetter = Read-Host "Please enter the drive letter for the Windows 11 image"
-$DriveLetter = $DriveLetter + ":"
+if (-not $ISO) {
+    if ($NonInteractive) { Write-Host "ISO drive letter not provided. Use -ISO <letter> in NonInteractive mode."; exit 1 }
+    $DriveLetter = Read-Host "Please enter the drive letter for the Windows 11 image"
+} else {
+    $DriveLetter = $ISO
+}
+if ($DriveLetter -match '^[c-zC-Z]$') { $DriveLetter = $DriveLetter + ":" }
 
 if ((Test-Path "$DriveLetter\sources\boot.wim") -eq $false -or (Test-Path "$DriveLetter\sources\install.wim") -eq $false) {
     if ((Test-Path "$DriveLetter\sources\install.esd") -eq $true) {
         Write-Host "Found install.esd, converting to install.wim..."
         &  'dism' '/English' "/Get-WimInfo" "/wimfile:$DriveLetter\sources\install.esd"
-        $index = Read-Host "Please enter the image index"
+        if ($NonInteractive) {
+            $imagesEsd = Get-WindowsImage -ImagePath "$DriveLetter\sources\install.esd"
+            $preferredNames = @()
+            switch ($VersionSelector) {
+                'Pro' { $preferredNames = @('Windows 11 Pro') }
+                'Home' { $preferredNames = @('Windows 11 Home') }
+                'ProWorkstations' { $preferredNames = @('Windows 11 Pro for Workstations') }
+                default { $preferredNames = @('Windows 11 Pro') }
+            }
+            $selected = $imagesEsd | Where-Object { $preferredNames -contains $_.ImageName } | Select-Object -First 1
+            if (-not $selected) { $selected = $imagesEsd | Select-Object -First 1 }
+            $index = if ($selected) { $selected.ImageIndex } else { 1 }
+        } else {
+            $index = Read-Host "Please enter the image index"
+        }
         Write-Host ' '
         Write-Host 'Converting install.esd to install.wim. This may take a while...'
         & 'DISM' /Export-Image /SourceImageFile:"$DriveLetter\sources\install.esd" /SourceIndex:$index /DestinationImageFile:"$mainOSDrive\tiny11\sources\install.wim" /Compress:max /CheckIntegrity
@@ -66,7 +101,22 @@ Start-Sleep -Seconds 2
 Clear-Host
 Write-Host "Getting image information:"
 &  'dism' '/English' "/Get-WimInfo" "/wimfile:$mainOSDrive\tiny11\sources\install.wim"
-$index = Read-Host "Please enter the image index"
+if ($NonInteractive) {
+    $imagesWim = Get-WindowsImage -ImagePath "$mainOSDrive\tiny11\sources\install.wim"
+    $preferredNames = @()
+    switch ($VersionSelector) {
+        'Pro' { $preferredNames = @('Windows 11 Pro') }
+        'Home' { $preferredNames = @('Windows 11 Home') }
+        'ProWorkstations' { $preferredNames = @('Windows 11 Pro for Workstations') }
+        default { $preferredNames = @('Windows 11 Pro') }
+    }
+    $selected = $imagesWim | Where-Object { $preferredNames -contains $_.ImageName }
+    if (-not $selected) { $selected = $imagesWim | Select-Object -First 1 }
+    $index = $selected.ImageIndex
+    Write-Host "Auto-selected image index: $index ($($selected.ImageName))"
+} else {
+    $index = Read-Host "Please enter the image index"
+}
 Write-Host "Mounting Windows image. This may take a while."
 $wimFilePath = "$($env:SystemDrive)\tiny11\sources\install.wim" 
 & takeown "/F" $wimFilePath 
@@ -173,42 +223,44 @@ if ($input -eq 'y') {
     & 'dism'  "/image:$scratchDir" '/enable-feature' '/featurename:NetFX3' '/All' "/source:$($env:SystemDrive)\tiny11\sources\sxs" 
     Write-Host ".NET 3.5 has been enabled."
 }
-elseif ($input -eq 'n') {
+elseif (-not $NonInteractive -and $input -eq 'n') {
     Write-Host "You chose not to enable .NET 3.5. Continuing..."
 }
 else {
     Write-Host "Invalid input. Please enter 'y' to enable .NET 3.5 or 'n' to continue without installing .net 3.5."
 }
-Write-Host "Removing Edge:"
-Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\Edge" -Recurse -Force >null
-Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeUpdate" -Recurse -Force >null
-Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeCore" -Recurse -Force >null
-if ($architecture -eq 'amd64') {
-    $folderPath = Get-ChildItem -Path "$mainOSDrive\scratchdir\Windows\WinSxS" -Filter "amd64_microsoft-edge-webview_31bf3856ad364e35*" -Directory | Select-Object -ExpandProperty FullName
+if ($RemoveEdge -eq 'yes') {
+    Write-Host "Removing Edge:"
+    Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\Edge" -Recurse -Force >null
+    Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeUpdate" -Recurse -Force >null
+    Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeCore" -Recurse -Force >null
+    if ($architecture -eq 'amd64') {
+        $folderPath = Get-ChildItem -Path "$mainOSDrive\scratchdir\Windows\WinSxS" -Filter "amd64_microsoft-edge-webview_31bf3856ad364e35*" -Directory | Select-Object -ExpandProperty FullName
 
-    if ($folderPath) {
-        & 'takeown' '/f' $folderPath '/r' >null
-        & icacls $folderPath  "/grant" "$($adminGroup.Value):(F)" '/T' '/C' >null
-        Remove-Item -Path $folderPath -Recurse -Force >null
-    } else {
-        Write-Host "Folder not found."
-    }
-} elseif ($architecture -eq 'arm64') {
-    $folderPath = Get-ChildItem -Path "$mainOSDrive\scratchdir\Windows\WinSxS" -Filter "arm64_microsoft-edge-webview_31bf3856ad364e35*" -Directory | Select-Object -ExpandProperty FullName >null
+        if ($folderPath) {
+            & 'takeown' '/f' $folderPath '/r' >null
+            & icacls $folderPath  "/grant" "$($adminGroup.Value):(F)" '/T' '/C' >null
+            Remove-Item -Path $folderPath -Recurse -Force >null
+        } else {
+            Write-Host "Folder not found."
+        }
+    } elseif ($architecture -eq 'arm64') {
+        $folderPath = Get-ChildItem -Path "$mainOSDrive\scratchdir\Windows\WinSxS" -Filter "arm64_microsoft-edge-webview_31bf3856ad364e35*" -Directory | Select-Object -ExpandProperty FullName >null
 
-    if ($folderPath) {
-        & 'takeown' '/f' $folderPath '/r'>null
-        & icacls $folderPath  "/grant" "$($adminGroup.Value):(F)" '/T' '/C' >null
-        Remove-Item -Path $folderPath -Recurse -Force >null
+        if ($folderPath) {
+            & 'takeown' '/f' $folderPath '/r'>null
+            & icacls $folderPath  "/grant" "$($adminGroup.Value):(F)" '/T' '/C' >null
+            Remove-Item -Path $folderPath -Recurse -Force >null
+        } else {
+            Write-Host "Folder not found."
+        }
     } else {
-        Write-Host "Folder not found."
+        Write-Host "Unknown architecture: $architecture"
     }
-} else {
-    Write-Host "Unknown architecture: $architecture"
+    & 'takeown' '/f' "$mainOSDrive\scratchdir\Windows\System32\Microsoft-Edge-Webview" '/r'
+    & 'icacls' "$mainOSDrive\scratchdir\Windows\System32\Microsoft-Edge-Webview" '/grant' "$($adminGroup.Value):(F)" '/T' '/C'
+    Remove-Item -Path "$mainOSDrive\scratchdir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force
 }
-& 'takeown' '/f' "$mainOSDrive\scratchdir\Windows\System32\Microsoft-Edge-Webview" '/r'
-& 'icacls' "$mainOSDrive\scratchdir\Windows\System32\Microsoft-Edge-Webview" '/grant' "$($adminGroup.Value):(F)" '/T' '/C'
-Remove-Item -Path "$mainOSDrive\scratchdir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force
 Write-Host "Removing WinRE"
 & 'takeown' '/f' "$mainOSDrive\scratchdir\Windows\System32\Recovery" '/r'
 & 'icacls' "$mainOSDrive\scratchdir\Windows\System32\Recovery" '/grant' 'Administrators:F' '/T' '/C'
@@ -332,11 +384,11 @@ Rename-Item -Path $mainOSDrive\scratchdir\Windows\WinSxS_edit -NewName $mainOSDr
 Write-Host "Complete!"
 
 Write-Host "Loading registry..."
-reg load HKLM\zCOMPONENTS $ScratchDisk\scratchdir\Windows\System32\config\COMPONENTS | Out-Null
-reg load HKLM\zDEFAULT $ScratchDisk\scratchdir\Windows\System32\config\default | Out-Null
-reg load HKLM\zNTUSER $ScratchDisk\scratchdir\Users\Default\ntuser.dat | Out-Null
-reg load HKLM\zSOFTWARE $ScratchDisk\scratchdir\Windows\System32\config\SOFTWARE | Out-Null
-reg load HKLM\zSYSTEM $ScratchDisk\scratchdir\Windows\System32\config\SYSTEM | Out-Null
+reg load HKLM\zCOMPONENTS $mainOSDrive\scratchdir\Windows\System32\config\COMPONENTS | Out-Null
+reg load HKLM\zDEFAULT $mainOSDrive\scratchdir\Windows\System32\config\default | Out-Null
+reg load HKLM\zNTUSER $mainOSDrive\scratchdir\Users\Default\ntuser.dat | Out-Null
+reg load HKLM\zSOFTWARE $mainOSDrive\scratchdir\Windows\System32\config\SOFTWARE | Out-Null
+reg load HKLM\zSYSTEM $mainOSDrive\scratchdir\Windows\System32\config\SYSTEM | Out-Null
 Write-Host "Bypassing system requirements(on the system image):"
 & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
@@ -409,12 +461,14 @@ Write-Host "Prevents installation or DevHome and Outlook:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate' '/v' 'workCompleted' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 & 'reg' 'delete' 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate' '/f' | Out-Null
 & 'reg' 'delete' 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\DevHomeUpdate' '/f' | Out-Null
+if ($RemoveAI -eq 'yes') {
 Write-Host "Disabling Copilot"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsCopilot' '/v' 'TurnOffWindowsCopilot' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Edge' '/v' 'HubsSidebarEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer' '/v' 'DisableSearchBoxSuggestions' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 Write-Host "Prevents installation of Teams:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Teams' '/v' 'DisableInstallation' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+}
 Write-Host "Prevent installation of New Outlook":
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail' '/v' 'PreventRun' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 $tasksPath = "C:\scratchdir\Windows\System32\Tasks"
@@ -556,11 +610,13 @@ if ([System.IO.Directory]::Exists($ADKDepTools)) {
     $OSCDIMG = $localOSCDIMGPath
 }
 
-& "$OSCDIMG" '-m' '-o' '-u2' '-udfver102' "-bootdata:2#p0,e,b$ScratchDisk\tiny11\boot\etfsboot.com#pEF,e,b$ScratchDisk\tiny11\efi\microsoft\boot\efisys.bin" "$ScratchDisk\tiny11" "$PSScriptRoot\tiny11.iso"
+& "$OSCDIMG" '-m' '-o' '-u2' '-udfver102' "-bootdata:2#p0,e,b$mainOSDrive\tiny11\boot\etfsboot.com#pEF,e,b$mainOSDrive\tiny11\efi\microsoft\boot\efisys.bin" "$mainOSDrive\tiny11" "$PSScriptRoot\tiny11-core.iso"
 
 # Finishing up
+if (-not $NonInteractive) {
 Write-Host "Creation completed! Press any key to exit the script..."
 Read-Host "Press Enter to continue"
+}
 Write-Host "Performing Cleanup..."
 Remove-Item -Path "$mainOSDrive\tiny11" -Recurse -Force >null
 Remove-Item -Path "$mainOSDrive\scratchdir" -Recurse -Force >null

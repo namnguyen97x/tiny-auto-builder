@@ -30,7 +30,13 @@
 #---------[ Parameters ]---------#
 param (
     [ValidatePattern('^[c-zC-Z]$')][string]$ISO,
-    [ValidatePattern('^[c-zC-Z]$')][string]$SCRATCH
+    [ValidatePattern('^[c-zC-Z]$')][string]$SCRATCH,
+    [switch]$NonInteractive,
+    [ValidateSet('Auto','Pro','Home','ProWorkstations')][string]$VersionSelector = 'Auto',
+    [ValidateSet('yes','no')][string]$RemoveDefender = 'no',
+    [ValidateSet('yes','no')][string]$RemoveAI = 'yes',
+    [ValidateSet('yes','no')][string]$RemoveEdge = 'yes',
+    [ValidateSet('yes','no')][string]$RemoveStore = 'yes'
 )
 
 if (-not $SCRATCH) {
@@ -70,13 +76,17 @@ function Remove-RegistryValue {
 #---------[ Execution ]---------#
 # Check if PowerShell execution is restricted
 if ((Get-ExecutionPolicy) -eq 'Restricted') {
-    Write-Output "Your current PowerShell Execution Policy is set to Restricted, which prevents scripts from running. Do you want to change it to RemoteSigned? (yes/no)"
-    $response = Read-Host
-    if ($response -eq 'yes') {
+    if ($NonInteractive) {
         Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false
     } else {
-        Write-Output "The script cannot be run without changing the execution policy. Exiting..."
-        exit
+        Write-Output "Your current PowerShell Execution Policy is set to Restricted, which prevents scripts from running. Do you want to change it to RemoteSigned? (yes/no)"
+        $response = Read-Host
+        if ($response -eq 'yes') {
+            Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false
+        } else {
+            Write-Output "The script cannot be run without changing the execution policy. Exiting..."
+            exit
+        }
     }
 }
 
@@ -111,6 +121,10 @@ $hostArchitecture = $Env:PROCESSOR_ARCHITECTURE
 New-Item -ItemType Directory -Force -Path "$ScratchDisk\tiny11\sources" | Out-Null
 do {
     if (-not $ISO) {
+        if ($NonInteractive) {
+            Write-Error "ISO drive letter not provided. Use -ISO <letter> in NonInteractive mode."
+            exit 1
+        }
         $DriveLetter = Read-Host "Please enter the drive letter for the Windows 11 image"
     } else {
         $DriveLetter = $ISO
@@ -119,15 +133,29 @@ do {
         $DriveLetter = $DriveLetter + ":"
         Write-Output "Drive letter set to $DriveLetter"
     } else {
-        Write-Output "Invalid drive letter. Please enter a letter between C and Z."
+        if (-not $NonInteractive) { Write-Output "Invalid drive letter. Please enter a letter between C and Z." }
     }
 } while ($DriveLetter -notmatch '^[c-zC-Z]:$')
 
 if ((Test-Path "$DriveLetter\sources\boot.wim") -eq $false -or (Test-Path "$DriveLetter\sources\install.wim") -eq $false) {
     if ((Test-Path "$DriveLetter\sources\install.esd") -eq $true) {
         Write-Output "Found install.esd, converting to install.wim..."
-        Get-WindowsImage -ImagePath $DriveLetter\sources\install.esd
-        $index = Read-Host "Please enter the image index"
+        $imagesEsd = Get-WindowsImage -ImagePath $DriveLetter\sources\install.esd
+        if ($NonInteractive) {
+            $preferredNames = @()
+            switch ($VersionSelector) {
+                'Pro' { $preferredNames = @('Windows 11 Pro') }
+                'Home' { $preferredNames = @('Windows 11 Home') }
+                'ProWorkstations' { $preferredNames = @('Windows 11 Pro for Workstations') }
+                default { $preferredNames = @('Windows 11 Pro') }
+            }
+            $selected = $imagesEsd | Where-Object { $preferredNames -contains $_.ImageName } | Select-Object -First 1
+            if (-not $selected) { $selected = $imagesEsd | Select-Object -First 1 }
+            $index = if ($selected) { $selected.ImageIndex } else { 1 }
+        } else {
+            Get-WindowsImage -ImagePath $DriveLetter\sources\install.esd
+            $index = Read-Host "Please enter the image index"
+        }
         Write-Output ' '
         Write-Output 'Converting install.esd to install.wim. This may take a while...'
         Export-WindowsImage -SourceImagePath $DriveLetter\sources\install.esd -SourceIndex $index -DestinationImagePath $ScratchDisk\tiny11\sources\install.wim -Compressiontype Maximum -CheckIntegrity
@@ -146,10 +174,25 @@ Write-Output "Copy complete!"
 Start-Sleep -Seconds 2
 Clear-Host
 Write-Output "Getting image information:"
-$ImagesIndex = (Get-WindowsImage -ImagePath $ScratchDisk\tiny11\sources\install.wim).ImageIndex
-while ($ImagesIndex -notcontains $index) {
-    Get-WindowsImage -ImagePath $ScratchDisk\tiny11\sources\install.wim
-    $index = Read-Host "Please enter the image index"
+$imagesWim = Get-WindowsImage -ImagePath $ScratchDisk\tiny11\sources\install.wim
+if ($NonInteractive) {
+    $preferredNames = @()
+    switch ($VersionSelector) {
+        'Pro' { $preferredNames = @('Windows 11 Pro') }
+        'Home' { $preferredNames = @('Windows 11 Home') }
+        'ProWorkstations' { $preferredNames = @('Windows 11 Pro for Workstations') }
+        default { $preferredNames = @('Windows 11 Pro') }
+    }
+    $selected = $imagesWim | Where-Object { $preferredNames -contains $_.ImageName }
+    if (-not $selected) { $selected = $imagesWim | Select-Object -First 1 }
+    $index = $selected.ImageIndex
+    Write-Output "Auto-selected image index: $index ($($selected.ImageName))"
+} else {
+    $ImagesIndex = $imagesWim.ImageIndex
+    while ($ImagesIndex -notcontains $index) {
+        Get-WindowsImage -ImagePath $ScratchDisk\tiny11\sources\install.wim
+        $index = Read-Host "Please enter the image index"
+    }
 }
 Write-Output "Mounting Windows image. This may take a while."
 $wimFilePath = "$ScratchDisk\tiny11\sources\install.wim"
@@ -264,6 +307,7 @@ foreach ($package in $packagesToRemove) {
     & 'dism' '/English' "/image:$($ScratchDisk)\scratchdir" '/Remove-ProvisionedAppxPackage' "/PackageName:$package"
 }
 
+if ($RemoveEdge -eq 'yes') {
 Write-Output "Removing Edge:"
 Remove-Item -Path "$ScratchDisk\scratchdir\Program Files (x86)\Microsoft\Edge" -Recurse -Force | Out-Null
 Remove-Item -Path "$ScratchDisk\scratchdir\Program Files (x86)\Microsoft\EdgeUpdate" -Recurse -Force | Out-Null
@@ -271,6 +315,7 @@ Remove-Item -Path "$ScratchDisk\scratchdir\Program Files (x86)\Microsoft\EdgeCor
 & 'takeown' '/f' "$ScratchDisk\scratchdir\Windows\System32\Microsoft-Edge-Webview" '/r' | Out-Null
 & 'icacls' "$ScratchDisk\scratchdir\Windows\System32\Microsoft-Edge-Webview" '/grant' "$($adminGroup.Value):(F)" '/T' '/C' | Out-Null
 Remove-Item -Path "$ScratchDisk\scratchdir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force | Out-Null
+}
 Write-Output "Removing OneDrive:"
 & 'takeown' '/f' "$ScratchDisk\scratchdir\Windows\System32\OneDriveSetup.exe" | Out-Null
 & 'icacls' "$ScratchDisk\scratchdir\Windows\System32\OneDriveSetup.exe" '/grant' "$($adminGroup.Value):(F)" '/T' '/C' | Out-Null
@@ -330,9 +375,11 @@ Set-RegistryValue 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker' 'PreventDeviceE
 Write-Output "Disabling Chat icon:"
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat' 'ChatIcon' 'REG_DWORD' '3'
 Set-RegistryValue 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'TaskbarMn' 'REG_DWORD' '0'
+if ($RemoveEdge -eq 'yes') {
 Write-Output "Removing Edge related registries"
 Remove-RegistryValue "HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge"
 Remove-RegistryValue "HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update"
+}
 Write-Output "Disabling OneDrive folder backup"
 Set-RegistryValue "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" "DisableFileSyncNGSC" "REG_DWORD" "1"
 Write-Output "Disabling Telemetry:"
@@ -353,12 +400,14 @@ Set-RegistryValue 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate
 Set-RegistryValue 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate' 'workCompleted' 'REG_DWORD' '1'
 Remove-RegistryValue 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate'
 Remove-RegistryValue 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\DevHomeUpdate'
+if ($RemoveAI -eq 'yes') {
 Write-Output "Disabling Copilot"
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 'REG_DWORD' '1'
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Edge' 'HubsSidebarEnabled' 'REG_DWORD' '0'
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer' 'DisableSearchBoxSuggestions' 'REG_DWORD' '1'
 Write-Output "Prevents installation of Teams:"
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Teams' 'DisableInstallation' 'REG_DWORD' '1'
+}
 Write-Output "Prevent installation of New Outlook":
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail' 'PreventRun' 'REG_DWORD' '1'
 
@@ -469,14 +518,18 @@ if ([System.IO.Directory]::Exists($ADKDepTools)) {
 & "$OSCDIMG" '-m' '-o' '-u2' '-udfver102' "-bootdata:2#p0,e,b$ScratchDisk\tiny11\boot\etfsboot.com#pEF,e,b$ScratchDisk\tiny11\efi\microsoft\boot\efisys.bin" "$ScratchDisk\tiny11" "$PSScriptRoot\tiny11.iso"
 
 # Finishing up
+if (-not $NonInteractive) {
 Write-Output "Creation completed! Press any key to exit the script..."
 Read-Host "Press Enter to continue"
+}
 Write-Output "Performing Cleanup..."
 Remove-Item -Path "$ScratchDisk\tiny11" -Recurse -Force | Out-Null
 Remove-Item -Path "$ScratchDisk\scratchdir" -Recurse -Force | Out-Null
+if (-not $NonInteractive) {
 Write-Output "Ejecting Iso drive"
 Get-Volume -DriveLetter $DriveLetter[0] | Get-DiskImage | Dismount-DiskImage
 Write-Output "Iso drive ejected"
+}
 Write-Output "Removing oscdimg.exe..."
 Remove-Item -Path "$PSScriptRoot\oscdimg.exe" -Force -ErrorAction SilentlyContinue
 Write-Output "Removing autounattend.xml..."
