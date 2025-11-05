@@ -510,14 +510,16 @@ if ($RemoveEdge -eq 'yes') {
     Write-Host "Keeping Edge (RemoveEdge=no)"
 }
 
-if (Test-Path "$scratchDir\Windows\System32\Recovery\winre.wim") {
-    try {
-        Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Recurse -Force -ErrorAction Stop
-        New-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -ItemType File -Force | Out-Null
-    } catch {
-        Write-Host "  Warning: WinRE could not be removed/replaced (continuing...)" -ForegroundColor Yellow
-    }
-}
+# Keep WinRE.wim to preserve "Previous Version of Setup" option in Windows Setup
+# Removing WinRE.wim causes the "Previous Version of Setup" option to disappear
+# if (Test-Path "$scratchDir\Windows\System32\Recovery\winre.wim") {
+#     try {
+#         Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Recurse -Force -ErrorAction Stop
+#         New-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -ItemType File -Force | Out-Null
+#     } catch {
+#         Write-Host "  Warning: WinRE could not be removed/replaced (continuing...)" -ForegroundColor Yellow
+#     }
+# }
 
 Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -ErrorAction SilentlyContinue 
 

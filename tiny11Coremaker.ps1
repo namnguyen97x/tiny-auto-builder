@@ -563,11 +563,13 @@ if ($EnableDebloat -ne 'yes' -or -not (Get-Module -Name tiny11-debloater)) {
         Write-Host "Keeping Edge (RemoveEdge=no)"
     }
     
-    Write-Host "Removing WinRE"
-    & 'takeown' '/f' "$mainOSDrive\scratchdir\Windows\System32\Recovery" '/r'
-    & 'icacls' "$mainOSDrive\scratchdir\Windows\System32\Recovery" '/grant' 'Administrators:F' '/T' '/C'
-    Remove-Item -Path "$mainOSDrive\scratchdir\Windows\System32\Recovery\winre.wim" -Recurse -Force
-    New-Item -Path "$mainOSDrive\scratchdir\Windows\System32\Recovery\winre.wim" -ItemType File -Force
+# Keep WinRE.wim to preserve "Previous Version of Setup" option in Windows Setup
+# Removing WinRE.wim causes the "Previous Version of Setup" option to disappear
+# Write-Host "Removing WinRE"
+# & 'takeown' '/f' "$mainOSDrive\scratchdir\Windows\System32\Recovery" '/r'
+# & 'icacls' "$mainOSDrive\scratchdir\Windows\System32\Recovery" '/grant' 'Administrators:F' '/T' '/C'
+# Remove-Item -Path "$mainOSDrive\scratchdir\Windows\System32\Recovery\winre.wim" -Recurse -Force
+# New-Item -Path "$mainOSDrive\scratchdir\Windows\System32\Recovery\winre.wim" -ItemType File -Force
     
     Write-Host "Removing OneDrive:"
     & 'takeown' '/f' "$mainOSDrive\scratchdir\Windows\System32\OneDriveSetup.exe" >null
