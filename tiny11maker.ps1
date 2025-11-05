@@ -45,7 +45,10 @@ param (
     [ValidateSet('Auto','Pro','Home','ProWorkstations')][string]$VersionSelector = 'Auto',
     
     # Custom ISO filename (optional, defaults to maker.iso or tiny11.iso)
-    [string]$IsoName = ''
+    [string]$IsoName = '',
+    
+    # IRST driver path (optional, path to folder containing IRST driver .inf files)
+    [string]$IrstDriverPath = ''
 )
 
 # Set error handling to continue on non-critical errors
@@ -109,6 +112,36 @@ function Remove-RegistryValue {
 	} catch {
 		Write-Output "Error removing registry value: $_"
 	}
+}
+
+function Add-DriverToImage {
+    param (
+        [string]$MountPath,
+        [string]$DriverPath,
+        [string]$ImageName
+    )
+    
+    if (-not $DriverPath -or -not (Test-Path $DriverPath)) {
+        Write-Output "IRST driver path not provided or invalid, skipping driver injection."
+        return
+    }
+    
+    Write-Output "Injecting IRST driver into $ImageName..."
+    Write-Output "Driver path: $DriverPath"
+    
+    try {
+        $result = & dism /English /image:"$MountPath" /add-driver /driver:"$DriverPath" /recurse 2>&1
+        $outputString = $result -join "`n"
+        
+        if ($LASTEXITCODE -eq 0 -and -not ($outputString | Select-String -Pattern "Error|Failed|failed" -Quiet)) {
+            Write-Output "IRST driver injected successfully into $ImageName" -ForegroundColor Green
+        } else {
+            Write-Warning "Failed to inject IRST driver into $ImageName (exit code: $LASTEXITCODE)"
+            Write-Warning "Output: $outputString"
+        }
+    } catch {
+        Write-Warning "Error injecting IRST driver into $ImageName: $($_.Exception.Message)"
+    }
 }
 
 #---------[ Execution ]---------#
@@ -892,6 +925,13 @@ reg unload HKLM\zNTUSER | Out-Null
 reg unload HKLM\zSOFTWARE | Out-Null
 reg unload HKLM\zSYSTEM | Out-Null
 Write-Output "Cleaning up image..."
+
+# Inject IRST driver into install.wim if provided
+if ($IrstDriverPath) {
+    Add-DriverToImage -MountPath "$ScratchDisk\scratchdir" -DriverPath $IrstDriverPath -ImageName "install.wim"
+}
+
+Write-Output "Cleaning up image..."
 dism.exe /Image:$ScratchDisk\scratchdir /Cleanup-Image /StartComponentCleanup /ResetBase
 Write-Output "Cleanup complete."
 Write-Output ' '
@@ -947,6 +987,11 @@ reg unload HKLM\zDEFAULT | Out-Null
 reg unload HKLM\zNTUSER | Out-Null
 reg unload HKLM\zSOFTWARE | Out-Null
 reg unload HKLM\zSYSTEM | Out-Null
+
+# Inject IRST driver into boot.wim (Windows Setup) if provided
+if ($IrstDriverPath) {
+    Add-DriverToImage -MountPath "$ScratchDisk\scratchdir" -DriverPath $IrstDriverPath -ImageName "boot.wim (Windows Setup)"
+}
 
 Write-Output "Unmounting image (keeping both indexes intact)..."
 Dismount-WindowsImage -Path $ScratchDisk\scratchdir -Save

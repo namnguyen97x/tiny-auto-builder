@@ -20,7 +20,13 @@ param (
     [ValidateSet('yes','no')][string]$RemoveBluetoothDrivers = 'yes',
     [ValidateSet('yes','no')][string]$RemoveSmartcardDrivers = 'yes',
     [ValidateSet('yes','no')][string]$RemoveTapeDrivers = 'yes',
-    [ValidateSet('yes','no')][string]$RemoveRdpDrivers = 'yes'
+    [ValidateSet('yes','no')][string]$RemoveRdpDrivers = 'yes',
+    
+    # Custom ISO filename (optional, defaults to nano11.iso)
+    [string]$IsoName = '',
+    
+    # IRST driver path (optional, path to folder containing IRST driver .inf files)
+    [string]$IrstDriverPath = ''
 )
 
 # Set error handling to continue on non-critical errors
@@ -60,6 +66,37 @@ if (! $myWindowsPrincipal.IsInRole($adminRole))
 }
 
 Start-Transcript -Path "$PSScriptRoot\nano11.log" 
+
+# Function to inject driver into mounted image
+function Add-DriverToImage {
+    param (
+        [string]$MountPath,
+        [string]$DriverPath,
+        [string]$ImageName
+    )
+    
+    if (-not $DriverPath -or -not (Test-Path $DriverPath)) {
+        Write-Host "IRST driver path not provided or invalid, skipping driver injection."
+        return
+    }
+    
+    Write-Host "Injecting IRST driver into $ImageName..."
+    Write-Host "Driver path: $DriverPath"
+    
+    try {
+        $result = & dism /English /image:"$MountPath" /add-driver /driver:"$DriverPath" /recurse 2>&1
+        $outputString = $result -join "`n"
+        
+        if ($LASTEXITCODE -eq 0 -and -not ($outputString | Select-String -Pattern "Error|Failed|failed" -Quiet)) {
+            Write-Host "IRST driver injected successfully into $ImageName" -ForegroundColor Green
+        } else {
+            Write-Warning "Failed to inject IRST driver into $ImageName (exit code: $LASTEXITCODE)"
+            Write-Warning "Output: $outputString"
+        }
+    } catch {
+        Write-Warning "Error injecting IRST driver into $ImageName: $($_.Exception.Message)"
+    }
+} 
 
 if (-not $NonInteractive) {
     try {
@@ -1040,6 +1077,11 @@ if ($RemoveDefender -eq 'yes') {
 foreach ($service in $servicesToRemove) { Write-Host "Removing service: $service"; & 'reg' 'delete' "HKLM\zSYSTEM\ControlSet001\Services\$service" /f | Out-Null }
 reg unload HKLM\zSYSTEM 
 
+# Inject IRST driver into install.wim if provided
+if ($IrstDriverPath) {
+    Add-DriverToImage -MountPath $scratchDir -DriverPath $IrstDriverPath -ImageName "install.wim"
+}
+
 Write-Host "Cleaning up and unmounting install.wim..."
 & 'dism' '/English' "/image:$scratchDir" '/Cleanup-Image' '/StartComponentCleanup' '/ResetBase' 
 & 'dism' '/English' '/unmount-image' "/mountdir:$scratchDir" '/commit'
@@ -1082,6 +1124,12 @@ reg unload HKLM\zNTUSER
 reg unload HKLM\zDEFAULT
 reg unload HKLM\zSOFTWARE
 reg unload HKLM\zSYSTEM | Out-Null
+
+# Inject IRST driver into boot.wim (Windows Setup) if provided
+if ($IrstDriverPath) {
+    Add-DriverToImage -MountPath $scratchDir -DriverPath $IrstDriverPath -ImageName "boot.wim (Windows Setup)"
+}
+
 Start-Sleep -Seconds 10
 Write-Host "Unmounting image (keeping both indexes intact)..."
 & 'dism' '/English' '/unmount-image' "/mountdir:$scratchDir" '/commit'

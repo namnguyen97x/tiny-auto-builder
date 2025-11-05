@@ -13,7 +13,10 @@ param (
     [ValidateSet('yes','no')][string]$RemoveStore = 'yes',
     
     # Custom ISO filename (optional, defaults to tiny11-core.iso)
-    [string]$IsoName = ''
+    [string]$IsoName = '',
+    
+    # IRST driver path (optional, path to folder containing IRST driver .inf files)
+    [string]$IrstDriverPath = ''
 )
 
 # Set error handling to continue on non-critical errors
@@ -79,6 +82,37 @@ Start-Transcript -Path "$PSScriptRoot\tiny11.log"
 # Ask the user for input
 Write-Host "Welcome to tiny11 core builder! BETA 09-05-25"
 Write-Host "This script generates a significantly reduced Windows 11 image. However, it's not suitable for regular use due to its lack of serviceability - you can't add languages, updates, or features post-creation. tiny11 Core is not a full Windows 11 substitute but a rapid testing or development tool, potentially useful for VM environments."
+
+# Function to inject driver into mounted image
+function Add-DriverToImage {
+    param (
+        [string]$MountPath,
+        [string]$DriverPath,
+        [string]$ImageName
+    )
+    
+    if (-not $DriverPath -or -not (Test-Path $DriverPath)) {
+        Write-Host "IRST driver path not provided or invalid, skipping driver injection."
+        return
+    }
+    
+    Write-Host "Injecting IRST driver into $ImageName..."
+    Write-Host "Driver path: $DriverPath"
+    
+    try {
+        $result = & dism /English /image:"$MountPath" /add-driver /driver:"$DriverPath" /recurse 2>&1
+        $outputString = $result -join "`n"
+        
+        if ($LASTEXITCODE -eq 0 -and -not ($outputString | Select-String -Pattern "Error|Failed|failed" -Quiet)) {
+            Write-Host "IRST driver injected successfully into $ImageName" -ForegroundColor Green
+        } else {
+            Write-Warning "Failed to inject IRST driver into $ImageName (exit code: $LASTEXITCODE)"
+            Write-Warning "Output: $outputString"
+        }
+    } catch {
+        Write-Warning "Error injecting IRST driver into $ImageName: $($_.Exception.Message)"
+    }
+}
 
 if ($NonInteractive) {
     Write-Host "Non-interactive mode enabled. Continuing automatically..."
@@ -1065,6 +1099,13 @@ reg unload HKLM\zNTUSER | Out-Null
 reg unload HKLM\zSOFTWARE | Out-Null
 reg unload HKLM\zSYSTEM | Out-Null
 Write-Host "Cleaning up image..."
+
+# Inject IRST driver into install.wim if provided
+if ($IrstDriverPath) {
+    Add-DriverToImage -MountPath "$mainOSDrive\scratchdir" -DriverPath $IrstDriverPath -ImageName "install.wim"
+}
+
+Write-Host "Cleaning up image..."
 & 'dism' '/English' "/image:$mainOSDrive\scratchdir" '/Cleanup-Image' '/StartComponentCleanup' '/ResetBase' >null
 Write-Host "Cleanup complete."
 Write-Host ' '
@@ -1120,6 +1161,12 @@ reg unload HKLM\zDEFAULT | Out-Null
 reg unload HKLM\zNTUSER | Out-Null
 reg unload HKLM\zSOFTWARE | Out-Null
 reg unload HKLM\zSYSTEM | Out-Null
+
+# Inject IRST driver into boot.wim (Windows Setup) if provided
+if ($IrstDriverPath) {
+    Add-DriverToImage -MountPath "$mainOSDrive\scratchdir" -DriverPath $IrstDriverPath -ImageName "boot.wim (Windows Setup)"
+}
+
 Write-Host "Unmounting image (keeping both indexes intact)..."
 & 'dism' '/English' '/unmount-image' "/mountdir:$mainOSDrive\scratchdir" '/commit'
 if (-not $NonInteractive) {
