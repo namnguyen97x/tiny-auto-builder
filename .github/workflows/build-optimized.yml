@@ -40,6 +40,10 @@ on:
         required: false
         default: 'true'
         type: string
+      iso_name:
+        description: 'Custom ISO filename (leave empty to use default: maker.iso, nano11.iso, or tiny11-core.iso)'
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       build_type:
