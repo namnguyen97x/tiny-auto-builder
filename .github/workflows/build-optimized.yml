@@ -341,15 +341,24 @@ jobs:
             # Ignore if not supported
           }
           
-          # Display available memory
+          # Display available memory and CPU
           $memInfo = Get-CimInstance Win32_OperatingSystem
           $freeMemGB = [math]::Round($memInfo.FreePhysicalMemory / 1MB, 2)
+          $cpuCores = $env:NUMBER_OF_PROCESSORS
           Write-Host "Available RAM: $freeMemGB GB"
+          Write-Host "CPU Cores: $cpuCores"
+          
+          # Set environment variables for parallel processing
+          # Max number of parallel jobs/threads (use 80% of CPU cores)
+          $maxParallelJobs = [math]::Max(1, [math]::Floor($cpuCores * 0.8))
+          $env:MAX_PARALLEL_JOBS = $maxParallelJobs
+          Write-Host "✓ Max parallel jobs set to: $maxParallelJobs (80% of $cpuCores cores)" -ForegroundColor Green
           
           # Note about DISM parallelization
           Write-Host "Note: DISM operations run sequentially in scripts." -ForegroundColor Yellow
           Write-Host "      For parallel DISM operations, scripts need to be modified." -ForegroundColor Yellow
           Write-Host "      This workflow optimizes system-level performance only." -ForegroundColor Yellow
+          Write-Host "      File operations and registry operations can be parallelized." -ForegroundColor Yellow
       
       - name: Build Tiny11 ISO (Optimized with Monitoring)
         shell: pwsh
@@ -465,6 +474,9 @@ jobs:
           
           # Run the builder script with performance monitoring
           try {
+            # Set environment variable for scripts to use parallel processing
+            $env:MAX_PARALLEL_JOBS = if ($env:MAX_PARALLEL_JOBS) { $env:MAX_PARALLEL_JOBS } else { [math]::Max(1, [math]::Floor($env:NUMBER_OF_PROCESSORS * 0.8)) }
+            
             # Run script directly with output filtering
             & ".\$scriptName" @buildParams 2>&1 | ForEach-Object {
               if ($_ -match "Removal failed|Warning.*Failed to remove") {
@@ -475,7 +487,7 @@ jobs:
               
               # Periodically show performance metrics
               $now = Get-Date
-              if (-not $script:lastMetricsTime -or ($now - $script:lastMetricsTime).TotalMinutes -ge 5) {
+              if (-not $script:lastMetricsTime -or ($now - $script:lastMetricsTime).TotalMinutes -ge 2) {
                 $metrics = Get-PerformanceMetrics
                 $elapsed = $now - $buildStartTime
                 Write-Host "[Performance] [$([math]::Round($elapsed.TotalMinutes, 1)) min] CPU=$($metrics.CPUPercent)%, Free RAM=$($metrics.FreeMemoryGB) GB" -ForegroundColor Gray
