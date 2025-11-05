@@ -42,7 +42,10 @@ param (
     [switch]$NonInteractive = $false,
     
     # Version selector (Auto, Pro, Home, ProWorkstations)
-    [ValidateSet('Auto','Pro','Home','ProWorkstations')][string]$VersionSelector = 'Auto'
+    [ValidateSet('Auto','Pro','Home','ProWorkstations')][string]$VersionSelector = 'Auto',
+    
+    # Custom ISO filename (optional, defaults to maker.iso or tiny11.iso)
+    [string]$IsoName = ''
 )
 
 # Set error handling to continue on non-critical errors
@@ -973,8 +976,27 @@ if ([System.IO.Directory]::Exists($ADKDepTools)) {
     $OSCDIMG = $localOSCDIMGPath
 }
 
+# Determine ISO filename
+$isoFileName = if ($IsoName -and $IsoName.Trim() -ne '') {
+    # Use custom name if provided, ensure it has .iso extension
+    $name = $IsoName.Trim()
+    if (-not $name.EndsWith('.iso', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $name = "$name.iso"
+    }
+    $name
+} else {
+    # Default name based on build type (check environment variable if available)
+    $buildType = $env:BUILD_TYPE
+    if ($buildType -eq 'maker') {
+        'maker.iso'
+    } else {
+        'tiny11.iso'
+    }
+}
+
 Write-Output "Running oscdimg to create ISO..."
-$isoPath = "$PSScriptRoot\tiny11.iso"
+$isoPath = "$PSScriptRoot\$isoFileName"
+Write-Output "ISO will be saved as: $isoFileName" -ForegroundColor Cyan
 try {
     & "$OSCDIMG" '-m' '-o' '-u2' '-udfver102' "-bootdata:2#p0,e,b$ScratchDisk\tiny11\boot\etfsboot.com#pEF,e,b$ScratchDisk\tiny11\efi\microsoft\boot\efisys.bin" "$ScratchDisk\tiny11" $isoPath 2>&1 | Out-Null
     

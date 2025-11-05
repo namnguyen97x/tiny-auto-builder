@@ -90,6 +90,10 @@ on:
         required: false
         default: 'printer,scanner,bluetooth,smartcard,tape,rdp'
         type: string
+      iso_name:
+        description: 'Custom ISO filename (leave empty to use default: maker.iso, nano11.iso, or tiny11-core.iso)'
+        required: false
+        type: string
   push:
     branches:
       - main
@@ -446,6 +450,12 @@ jobs:
           $buildParams['RemoveEdge'] = Convert-ToYesNo $env:REMOVE_EDGE 'yes'
           $buildParams['RemoveStore'] = Convert-ToYesNo $env:REMOVE_STORE 'yes'
           
+          # Add ISO name parameter if provided
+          if ($env:ISO_NAME -and $env:ISO_NAME.Trim() -ne '') {
+            $buildParams['IsoName'] = $env:ISO_NAME.Trim()
+            Write-Host "Custom ISO name: $($buildParams['IsoName'])" -ForegroundColor Cyan
+          }
+          
           # Add driver removal parameters (NANO ONLY)
           if ($buildType -eq 'nano') {
             $driverRemoveStr = if ($env:REMOVE_DRIVERS) { $env:REMOVE_DRIVERS.Trim().ToLower() } else { 'all' }
@@ -505,11 +515,19 @@ jobs:
             $script:buildError = $_
           }
           
-          # Check if ISO was created
-          $isoName = switch ($buildType) {
-            'core' { 'tiny11-core.iso' }
-            'nano' { 'nano11.iso' }
-            default { 'tiny11.iso' }
+          # Check if ISO was created (use custom name if provided, else default)
+          $isoName = if ($env:ISO_NAME -and $env:ISO_NAME.Trim() -ne '') {
+            $name = $env:ISO_NAME.Trim()
+            if (-not $name.EndsWith('.iso', [System.StringComparison]::OrdinalIgnoreCase)) {
+              $name = "$name.iso"
+            }
+            $name
+          } else {
+            switch ($buildType) {
+              'core' { 'tiny11-core.iso' }
+              'nano' { 'nano11.iso' }
+              default { 'maker.iso' }
+            }
           }
           $repoRoot = $env:GITHUB_WORKSPACE
           $isoPath = Join-Path $repoRoot $isoName

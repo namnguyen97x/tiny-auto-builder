@@ -1067,8 +1067,22 @@ if (-not (Test-Path $OSCDIMG)) {
     }
 }
 
-$isoPath = "$PSScriptRoot\nano11.iso"
+# Determine ISO filename
+$isoFileName = if ($IsoName -and $IsoName.Trim() -ne '') {
+    # Use custom name if provided, ensure it has .iso extension
+    $name = $IsoName.Trim()
+    if (-not $name.EndsWith('.iso', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $name = "$name.iso"
+    }
+    $name
+} else {
+    # Default name
+    'nano11.iso'
+}
+
+$isoPath = "$PSScriptRoot\$isoFileName"
 Write-Host "Running oscdimg to create ISO..."
+Write-Host "ISO will be saved as: $isoFileName" -ForegroundColor Cyan
 try {
     & "$OSCDIMG" '-m' '-o' '-u2' '-udfver102' "-bootdata:2#p0,e,b$mainOSDrive\nano11\boot\etfsboot.com#pEF,e,b$mainOSDrive\nano11\efi\microsoft\boot\efisys.bin" "$mainOSDrive\nano11" $isoPath 2>&1 | Out-Null
     
@@ -1082,7 +1096,7 @@ try {
     $isoSize = (Get-Item $isoPath).Length / 1GB
     Write-Output "✓ ISO created successfully: $isoPath" -ForegroundColor Green
     Write-Output "  ISO size: $([math]::Round($isoSize, 2)) GB"
-    Write-Output "Creation completed! Your ISO is named nano11.iso"
+    Write-Output "Creation completed! Your ISO is named $isoFileName"
 } catch {
     Write-Error "Failed to create ISO: $($_.Exception.Message)"
     exit 1

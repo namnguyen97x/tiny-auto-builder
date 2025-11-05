@@ -10,7 +10,10 @@ param (
     [ValidateSet('yes','no')][string]$RemoveDefender = 'yes',
     [ValidateSet('yes','no')][string]$RemoveAI = 'yes',
     [ValidateSet('yes','no')][string]$RemoveEdge = 'yes',
-    [ValidateSet('yes','no')][string]$RemoveStore = 'yes'
+    [ValidateSet('yes','no')][string]$RemoveStore = 'yes',
+    
+    # Custom ISO filename (optional, defaults to tiny11-core.iso)
+    [string]$IsoName = ''
 )
 
 # Set error handling to continue on non-critical errors
@@ -1110,8 +1113,22 @@ if ([System.IO.Directory]::Exists($ADKDepTools)) {
     $OSCDIMG = $localOSCDIMGPath
 }
 
+# Determine ISO filename
+$isoFileName = if ($IsoName -and $IsoName.Trim() -ne '') {
+    # Use custom name if provided, ensure it has .iso extension
+    $name = $IsoName.Trim()
+    if (-not $name.EndsWith('.iso', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $name = "$name.iso"
+    }
+    $name
+} else {
+    # Default name
+    'tiny11-core.iso'
+}
+
 Write-Host "Running oscdimg to create ISO..."
-$isoPath = "$PSScriptRoot\tiny11-core.iso"
+$isoPath = "$PSScriptRoot\$isoFileName"
+Write-Host "ISO will be saved as: $isoFileName" -ForegroundColor Cyan
 try {
     & "$OSCDIMG" '-m' '-o' '-u2' '-udfver102' "-bootdata:2#p0,e,b$mainOSDrive\tiny11\boot\etfsboot.com#pEF,e,b$mainOSDrive\tiny11\efi\microsoft\boot\efisys.bin" "$mainOSDrive\tiny11" $isoPath 2>&1 | Out-Null
     
