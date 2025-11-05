@@ -1,10 +1,45 @@
-name: Build Tiny11 ISO (Optimized Experimental)
+name: Build Tiny11 ISO (Optimized)
 
-# EXPERIMENTAL VERSION - For testing optimizations
-# This file contains experimental optimizations and should not replace build.yml
-# Use workflow_dispatch to manually trigger this workflow
+# OPTIMIZED VERSION - Uses Windows Server 2022 runner, caching, and performance optimizations
+# This replaces build.yml with optimized performance features
 
 on:
+  workflow_call:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: false
+        default: 'maker'
+        type: string
+      iso_url:
+        description: 'Windows ISO URL (leave empty to use default Windows 11 25H2 ISO)'
+        required: false
+        type: string
+      version_selector:
+        description: 'Windows edition to build (default: Auto - selects Pro)'
+        required: false
+        default: 'Auto'
+        type: string
+      remove_defender:
+        description: 'Remove Windows Defender (default: false)'
+        required: false
+        default: 'false'
+        type: string
+      remove_ai:
+        description: 'Remove AI/Copilot components (default: true)'
+        required: false
+        default: 'true'
+        type: string
+      remove_edge:
+        description: 'Remove Microsoft Edge browser (default: true)'
+        required: false
+        default: 'true'
+        type: string
+      remove_store:
+        description: 'Remove Microsoft Store (default: true)'
+        required: false
+        default: 'true'
+        type: string
   workflow_dispatch:
     inputs:
       build_type:
@@ -55,6 +90,14 @@ on:
         required: false
         default: 'printer,scanner,bluetooth,smartcard,tape,rdp'
         type: string
+  push:
+    branches:
+      - main
+    paths:
+      - '*.ps1'
+      - '.github/workflows/*.yml'
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -311,13 +354,13 @@ jobs:
       - name: Build Tiny11 ISO (Optimized with Monitoring)
         shell: pwsh
         env:
-          BUILD_TYPE: ${{ github.event.inputs.build_type || 'maker' }}
-          VERSION_SELECTOR: ${{ github.event.inputs.version_selector || 'Auto' }}
-          REMOVE_DEFENDER: ${{ github.event.inputs.remove_defender || 'false' }}
-          REMOVE_AI: ${{ github.event.inputs.remove_ai || 'true' }}
-          REMOVE_EDGE: ${{ github.event.inputs.remove_edge || 'true' }}
-          REMOVE_STORE: ${{ github.event.inputs.remove_store || 'true' }}
-          REMOVE_DRIVERS: ${{ github.event.inputs.remove_drivers || 'printer,scanner,bluetooth,smartcard,tape,rdp' }}
+          BUILD_TYPE: ${{ github.event.inputs.build_type || inputs.build_type || 'maker' }}
+          VERSION_SELECTOR: ${{ github.event.inputs.version_selector || inputs.version_selector || 'Auto' }}
+          REMOVE_DEFENDER: ${{ github.event.inputs.remove_defender || inputs.remove_defender || 'false' }}
+          REMOVE_AI: ${{ github.event.inputs.remove_ai || inputs.remove_ai || 'true' }}
+          REMOVE_EDGE: ${{ github.event.inputs.remove_edge || inputs.remove_edge || 'true' }}
+          REMOVE_STORE: ${{ github.event.inputs.remove_store || inputs.remove_store || 'true' }}
+          REMOVE_DRIVERS: ${{ github.event.inputs.remove_drivers || inputs.remove_drivers || 'printer,scanner,bluetooth,smartcard,tape,rdp' }}
         run: |
           $ErrorActionPreference = 'Continue'
           $script:buildFailed = $false
@@ -484,7 +527,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: ${{ github.event.inputs.build_type || 'maker' }}-iso-optimized
+          name: ${{ github.event.inputs.build_type || inputs.build_type || 'maker' }}-iso
           path: |
             tiny11.iso
             tiny11-core.iso
