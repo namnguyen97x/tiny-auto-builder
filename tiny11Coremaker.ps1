@@ -529,9 +529,30 @@ if ($EnableDebloat -ne 'yes' -or -not (Get-Module -Name tiny11-debloater)) {
     # Honor RemoveEdge parameter from workflow
     if ($RemoveEdge -eq 'yes') {
         Write-Host "Removing Edge:"
-        Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\Edge" -Recurse -Force >null
-        Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeUpdate" -Recurse -Force >null
-        Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeCore" -Recurse -Force >null
+        # Use parallel processing for Edge removal if available
+        $parallelHelperPath = Join-Path $PSScriptRoot "parallel-helper.psm1"
+        if (Test-Path $parallelHelperPath) {
+            Import-Module $parallelHelperPath -Force -ErrorAction SilentlyContinue
+            if (Get-Module -Name parallel-helper) {
+                Write-Host "Using parallel processing for Edge removal..." -ForegroundColor Cyan
+                $edgePaths = @(
+                    "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\Edge",
+                    "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeUpdate",
+                    "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeCore"
+                )
+                Remove-ItemsParallel -Paths $edgePaths -Recurse -ErrorAction SilentlyContinue | Out-Null
+            } else {
+                # Fallback to sequential removal
+                Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\Edge" -Recurse -Force >null
+                Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeUpdate" -Recurse -Force >null
+                Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeCore" -Recurse -Force >null
+            }
+        } else {
+            # Fallback to sequential removal
+            Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\Edge" -Recurse -Force >null
+            Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeUpdate" -Recurse -Force >null
+            Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeCore" -Recurse -Force >null
+        }
         
         if ($architecture -eq 'amd64') {
             $folderPath = Get-ChildItem -Path "$mainOSDrive\scratchdir\Windows\WinSxS" -Filter "amd64_microsoft-edge-webview_31bf3856ad364e35*" -Directory | Select-Object -ExpandProperty FullName

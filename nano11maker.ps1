@@ -474,20 +474,69 @@ if (Test-Path $fontsPath) {
         Write-Host "  Warning: Some fonts could not be removed (continuing...)" -ForegroundColor Yellow
     }
 }
-Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Speech\Engines\TTS") -Recurse -Force -ErrorAction SilentlyContinue
-# Only remove Defender Definition Updates if RemoveDefender=yes
-# Removing these prevents Defender from working properly even if package is kept
-if ($RemoveDefender -eq 'yes') {
-    Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates" -Recurse -Force -ErrorAction SilentlyContinue
-}
-$inputMethodPaths = @("CHS", "CHT", "JPN", "KOR")
-foreach ($imPath in $inputMethodPaths) {
-    Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\$imPath" -Recurse -Force -ErrorAction SilentlyContinue
-}
-Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
-$foldersToRemove = @("Web", "Help", "Cursors")
-foreach ($folder in $foldersToRemove) {
-    Remove-Item -Path (Join-Path -Path $winDir -ChildPath $folder) -Recurse -Force -ErrorAction SilentlyContinue
+# Use parallel processing for file removal if available
+$parallelHelperPath = Join-Path $PSScriptRoot "parallel-helper.psm1"
+if (Test-Path $parallelHelperPath) {
+    Import-Module $parallelHelperPath -Force -ErrorAction SilentlyContinue
+    if (Get-Module -Name parallel-helper) {
+        Write-Host "Using parallel processing for file removal..." -ForegroundColor Cyan
+        $filesToRemove = @(
+            (Join-Path -Path $winDir -ChildPath "Speech\Engines\TTS")
+        )
+        
+        # Only remove Defender Definition Updates if RemoveDefender=yes
+        if ($RemoveDefender -eq 'yes') {
+            $filesToRemove += "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates"
+        }
+        
+        # Input method paths
+        $inputMethodPaths = @("CHS", "CHT", "JPN", "KOR")
+        foreach ($imPath in $inputMethodPaths) {
+            $filesToRemove += "$scratchDir\Windows\System32\InputMethod\$imPath"
+        }
+        
+        # Folders to remove
+        $foldersToRemove = @("Web", "Help", "Cursors")
+        foreach ($folder in $foldersToRemove) {
+            $filesToRemove += (Join-Path -Path $winDir -ChildPath $folder)
+        }
+        
+        # Remove Windows Temp contents (handle separately)
+        Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+        
+        # Remove all other items in parallel
+        Remove-ItemsParallel -Paths $filesToRemove -Recurse -ErrorAction SilentlyContinue | Out-Null
+    } else {
+        # Fallback to sequential removal
+        Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Speech\Engines\TTS") -Recurse -Force -ErrorAction SilentlyContinue
+        if ($RemoveDefender -eq 'yes') {
+            Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates" -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $inputMethodPaths = @("CHS", "CHT", "JPN", "KOR")
+        foreach ($imPath in $inputMethodPaths) {
+            Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\$imPath" -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+        $foldersToRemove = @("Web", "Help", "Cursors")
+        foreach ($folder in $foldersToRemove) {
+            Remove-Item -Path (Join-Path -Path $winDir -ChildPath $folder) -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+} else {
+    # Fallback to sequential removal
+    Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Speech\Engines\TTS") -Recurse -Force -ErrorAction SilentlyContinue
+    if ($RemoveDefender -eq 'yes') {
+        Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    $inputMethodPaths = @("CHS", "CHT", "JPN", "KOR")
+    foreach ($imPath in $inputMethodPaths) {
+        Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\$imPath" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+    $foldersToRemove = @("Web", "Help", "Cursors")
+    foreach ($folder in $foldersToRemove) {
+        Remove-Item -Path (Join-Path -Path $winDir -ChildPath $folder) -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # Honor RemoveEdge parameter from workflow
@@ -750,21 +799,36 @@ $tasksPath = "$mainOSDrive\scratchdir\Windows\System32\Tasks"
 
 Write-Host "Deleting scheduled task definition files..."
 
-# Application Compatibility Appraiser
-Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser" -Force -ErrorAction SilentlyContinue
-
-# Customer Experience Improvement Program (removes the entire folder and all tasks within it)
-Remove-Item -Path "$tasksPath\Microsoft\Windows\Customer Experience Improvement Program" -Recurse -Force -ErrorAction SilentlyContinue
-
-# Program Data Updater
-Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\ProgramDataUpdater" -Force -ErrorAction SilentlyContinue
-
-# Chkdsk Proxy
-Remove-Item -Path "$tasksPath\Microsoft\Windows\Chkdsk\Proxy" -Force -ErrorAction SilentlyContinue
-
-# Windows Error Reporting (QueueReporting)
-Remove-Item -Path "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting" -Force -ErrorAction SilentlyContinue
-
+# Use parallel processing for file removal if available
+$parallelHelperPath = Join-Path $PSScriptRoot "parallel-helper.psm1"
+if (Test-Path $parallelHelperPath) {
+    Import-Module $parallelHelperPath -Force -ErrorAction SilentlyContinue
+    if (Get-Module -Name parallel-helper) {
+        Write-Host "Using parallel processing for file removal..." -ForegroundColor Cyan
+        $taskPaths = @(
+            "$tasksPath\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser",
+            "$tasksPath\Microsoft\Windows\Customer Experience Improvement Program",
+            "$tasksPath\Microsoft\Windows\Application Experience\ProgramDataUpdater",
+            "$tasksPath\Microsoft\Windows\Chkdsk\Proxy",
+            "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting"
+        )
+        Remove-ItemsParallel -Paths $taskPaths -Recurse -ErrorAction SilentlyContinue | Out-Null
+    } else {
+        # Fallback to sequential removal
+        Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser" -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "$tasksPath\Microsoft\Windows\Customer Experience Improvement Program" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\ProgramDataUpdater" -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "$tasksPath\Microsoft\Windows\Chkdsk\Proxy" -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting" -Force -ErrorAction SilentlyContinue
+    }
+} else {
+    # Fallback to sequential removal
+    Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser" -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$tasksPath\Microsoft\Windows\Customer Experience Improvement Program" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\ProgramDataUpdater" -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$tasksPath\Microsoft\Windows\Chkdsk\Proxy" -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting" -Force -ErrorAction SilentlyContinue
+}
 Write-Host "Task files have been deleted."
 # If Defender is kept, we need to allow Defender updates but can still disable OS updates
 if ($RemoveDefender -eq 'yes') {
