@@ -45,6 +45,12 @@ function Remove-ItemsParallel {
         $MaxParallel = Get-MaxParallelJobs
     }
     
+    # Ensure MaxParallel is an integer
+    $MaxParallel = [int]$MaxParallel
+    if ($MaxParallel -le 0) {
+        $MaxParallel = 2  # Fallback to minimum
+    }
+    
     Write-Host "Removing $($Paths.Count) items in parallel (max $MaxParallel concurrent operations)..." -ForegroundColor Cyan
     
     $jobs = @()
@@ -52,7 +58,10 @@ function Remove-ItemsParallel {
     $totalBatches = [math]::Ceiling($Paths.Count / $batchSize)
     
     for ($batch = 0; $batch -lt $totalBatches; $batch++) {
-        $batchPaths = $Paths[$batch * $batchSize..([math]::Min(($batch + 1) * $batchSize - 1, $Paths.Count - 1))]
+        # Calculate batch range safely
+        $startIndex = $batch * $batchSize
+        $endIndex = [math]::Min(($batch + 1) * $batchSize - 1, $Paths.Count - 1)
+        $batchPaths = $Paths[$startIndex..$endIndex]
         
         $batchJobs = $batchPaths | ForEach-Object -Parallel {
             $path = $_
