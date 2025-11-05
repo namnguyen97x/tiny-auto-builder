@@ -887,6 +887,13 @@ Write-Host "Disabling Chat icon:"
 & 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced' '/v' 'TaskbarMn' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 Write-Host "Disabling Search Highlights:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\SearchSettings' '/v' 'IsDynamicSearchBoxEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+
+Write-Host "Disabling Bing Search in Start Bar:"
+& 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Search' '/v' 'BingSearchEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+
+Write-Host "Disabling Auto Discovery:"
+# Ensure the registry path exists
+& 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell' '/v' 'FolderType' '/t' 'REG_SZ' '/d' 'NotSpecified' '/f' | Out-Null
 # Honor RemoveEdge parameter from workflow
 if ($RemoveEdge -eq 'yes') {
     Write-Host "Removing Edge related registries"
