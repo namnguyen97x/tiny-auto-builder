@@ -235,30 +235,72 @@ function Add-DriverToImage {
     
     # If no driver path provided but auto-download is enabled
     if ((-not $DriverPath -or -not (Test-Path $DriverPath)) -and $AutoDownload) {
-        Write-Output "Auto-downloading IRST driver..."
+        Write-Host "Auto-downloading IRST driver..." -ForegroundColor Cyan
         $DriverPath = Get-IrstDriver -DownloadUrl $DownloadUrl
     }
     
     if (-not $DriverPath -or -not (Test-Path $DriverPath)) {
-        Write-Output "IRST driver path not provided or invalid, skipping driver injection."
+        Write-Host "IRST driver path not provided or invalid, skipping driver injection." -ForegroundColor Yellow
         return
     }
     
-    Write-Output "Injecting IRST driver into $ImageName..."
-    Write-Output "Driver path: $DriverPath"
+    Write-Host "Injecting IRST driver into $ImageName..." -ForegroundColor Cyan
+    Write-Host "Driver path: $DriverPath" -ForegroundColor Gray
     
-    try {
-        $result = & dism /English /image:"$MountPath" /add-driver /driver:"$DriverPath" /recurse 2>&1
-        $outputString = $result -join "`n"
+    # Check if DriverPath contains multiple driver folders (like IRST_Driver folder structure)
+    $infFiles = Get-ChildItem -Path $DriverPath -Filter "*.inf" -Recurse -ErrorAction SilentlyContinue
+    if (-not $infFiles) {
+        Write-Warning "No .inf files found in driver path: $DriverPath"
+        return
+    }
+    
+    # If DriverPath contains subfolders with .inf files, inject each subfolder separately
+    $driverFolders = Get-ChildItem -Path $DriverPath -Directory -ErrorAction SilentlyContinue | Where-Object {
+        $infInFolder = Get-ChildItem -Path $_.FullName -Filter "*.inf" -Recurse -ErrorAction SilentlyContinue
+        $infInFolder.Count -gt 0
+    }
+    
+    if ($driverFolders.Count -gt 0) {
+        # Multiple driver folders found (like IRST_Driver structure)
+        Write-Host "Found $($driverFolders.Count) driver folder(s) to inject..." -ForegroundColor Cyan
+        $successCount = 0
+        $failCount = 0
         
-        if ($LASTEXITCODE -eq 0 -and -not ($outputString | Select-String -Pattern "Error|Failed|failed" -Quiet)) {
-            Write-Output "IRST driver injected successfully into $ImageName" -ForegroundColor Green
-        } else {
-            Write-Warning "Failed to inject IRST driver into $ImageName (exit code: $LASTEXITCODE)"
-            Write-Warning "Output: $outputString"
+        foreach ($driverFolder in $driverFolders) {
+            Write-Host "  Injecting: $($driverFolder.Name)..." -ForegroundColor Gray
+            try {
+                $result = & dism /English /image:"$MountPath" /add-driver /driver:"$($driverFolder.FullName)" /recurse 2>&1
+                $outputString = $result -join "`n"
+                
+                if ($LASTEXITCODE -eq 0 -and -not ($outputString | Select-String -Pattern "Error|Failed|failed" -Quiet)) {
+                    Write-Host "    ✓ Success" -ForegroundColor Green
+                    $successCount++
+                } else {
+                    Write-Warning "    ✗ Failed (exit code: $LASTEXITCODE)"
+                    $failCount++
+                }
+            } catch {
+                Write-Warning "    ✗ Error: $($_.Exception.Message)"
+                $failCount++
+            }
         }
-    } catch {
-        Write-Warning "Error injecting IRST driver into $ImageName: $($_.Exception.Message)"
+        
+        Write-Host "Driver injection completed: $successCount succeeded, $failCount failed" -ForegroundColor $(if ($failCount -eq 0) { "Green" } else { "Yellow" })
+    } else {
+        # Single driver folder or flat structure
+        try {
+            $result = & dism /English /image:"$MountPath" /add-driver /driver:"$DriverPath" /recurse 2>&1
+            $outputString = $result -join "`n"
+            
+            if ($LASTEXITCODE -eq 0 -and -not ($outputString | Select-String -Pattern "Error|Failed|failed" -Quiet)) {
+                Write-Host "IRST driver injected successfully into $ImageName" -ForegroundColor Green
+            } else {
+                Write-Warning "Failed to inject IRST driver into $ImageName (exit code: $LASTEXITCODE)"
+                Write-Warning "Output: $outputString"
+            }
+        } catch {
+            Write-Warning "Error injecting IRST driver into $ImageName: $($_.Exception.Message)"
+        }
     }
 }
 
