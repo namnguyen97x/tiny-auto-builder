@@ -709,6 +709,9 @@ if ($RemoveDefender -eq 'yes') {
     } catch {
         Write-Warning "Failed to remove Defender: $_"
     }
+} else {
+    Write-Output "Keeping Windows Defender (RemoveDefender=no)"
+    Write-Output "Note: Defender needs Windows Update services to update virus definitions"
 }
 
 Write-Output "Disabling BitLocker Device Encryption"
