@@ -16,7 +16,13 @@ param (
     [string]$IsoName = '',
     
     # IRST driver path (optional, path to folder containing IRST driver .inf files)
-    [string]$IrstDriverPath = ''
+    [string]$IrstDriverPath = '',
+    
+    # Auto-download IRST driver if path not provided
+    [switch]$AutoDownloadIrst = $false,
+    
+    # IRST driver download URL (optional, for auto-download)
+    [string]$IrstDriverUrl = ''
 )
 
 # Set error handling to continue on non-critical errors
@@ -84,12 +90,124 @@ Write-Host "Welcome to tiny11 core builder! BETA 09-05-25"
 Write-Host "This script generates a significantly reduced Windows 11 image. However, it's not suitable for regular use due to its lack of serviceability - you can't add languages, updates, or features post-creation. tiny11 Core is not a full Windows 11 substitute but a rapid testing or development tool, potentially useful for VM environments."
 
 # Function to inject driver into mounted image
+function Get-IrstDriver {
+    param (
+        [string]$DownloadUrl = '',
+        [string]$TempDir = ''
+    )
+    
+    if (-not $TempDir) {
+        $TempDir = Join-Path $env:TEMP "IRST_Driver"
+    }
+    
+    # Create temp directory
+    if (-not (Test-Path $TempDir)) {
+        New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
+    }
+    
+    # Check if driver already exists in temp directory
+    $infFiles = Get-ChildItem -Path $TempDir -Filter "*.inf" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($infFiles) {
+        $driverFolder = $infFiles.Directory.FullName
+        Write-Host "Found existing IRST driver in temp directory: $driverFolder" -ForegroundColor Green
+        return $driverFolder
+    }
+    
+    # If no URL provided, try to find latest IRST driver
+    if (-not $DownloadUrl) {
+        Write-Host "No IRST driver URL provided. Searching for latest version..."
+        # Intel IRST driver URLs (Windows 11 compatible)
+        # Note: These URLs may change, user can provide custom URL via parameter
+        # Alternative: Search Intel Download Center for "Intel Rapid Storage Technology" Windows 11 driver
+        $possibleUrls = @(
+            "https://downloadmirror.intel.com/805586/f6vflpy-x64.zip",  # IRST 19.x for Windows 11
+            "https://downloadmirror.intel.com/805586/f6vflpy-x64.zip"   # Fallback (same URL)
+        )
+        
+        Write-Warning "Auto-download URLs may be outdated or blocked by Intel."
+        Write-Host "Please download IRST driver manually from Intel Download Center:" -ForegroundColor Yellow
+        Write-Host "  https://www.intel.com/content/www/us/en/download-center/home.html" -ForegroundColor Cyan
+        Write-Host "Search for: 'Intel Rapid Storage Technology' driver for Windows 11" -ForegroundColor Yellow
+        Write-Host "Then extract and provide path via -IrstDriverPath parameter, or provide download URL via -IrstDriverUrl" -ForegroundColor Yellow
+        Write-Host ""
+        
+        $found = $false
+        foreach ($url in $possibleUrls) {
+            try {
+                Write-Host "Attempting to download from: $url"
+                $zipPath = Join-Path $TempDir "IRST_Driver.zip"
+                Invoke-WebRequest -Uri $url -OutFile $zipPath -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -TimeoutSec 30 -ErrorAction Stop
+                $DownloadUrl = $url
+                $found = $true
+                break
+            } catch {
+                Write-Warning "Failed to download from $url : $($_.Exception.Message)"
+                continue
+            }
+        }
+        
+        if (-not $found) {
+            Write-Warning "Could not automatically download IRST driver. Please provide driver path manually or download URL."
+            Write-Host "You can download IRST driver from: https://www.intel.com/content/www/us/en/download-center/home.html"
+            Write-Host "Search for 'Intel Rapid Storage Technology' driver for Windows 11"
+            return $null
+        }
+        
+        $zipPath = Join-Path $TempDir "IRST_Driver.zip"
+    } else {
+        # Download from provided URL
+        Write-Host "Downloading IRST driver from: $DownloadUrl"
+        $zipPath = Join-Path $TempDir "IRST_Driver.zip"
+        try {
+            Invoke-WebRequest -Uri $DownloadUrl -OutFile $zipPath -UserAgent "Mozilla/5.0" -TimeoutSec 60 -ErrorAction Stop
+        } catch {
+            Write-Warning "Failed to download IRST driver: $($_.Exception.Message)"
+            return $null
+        }
+    }
+    
+    # Extract driver
+    Write-Host "Extracting IRST driver..."
+    try {
+        $extractPath = Join-Path $TempDir "IRST_Extracted"
+        if (Test-Path $extractPath) {
+            Remove-Item -Path $extractPath -Recurse -Force
+        }
+        Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force -ErrorAction Stop
+        
+        # Find driver folder (usually contains .inf files)
+        $infFiles = Get-ChildItem -Path $extractPath -Filter "*.inf" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        
+        if ($infFiles) {
+            $driverFolder = $infFiles.Directory.FullName
+            Write-Host "IRST driver extracted successfully: $driverFolder" -ForegroundColor Green
+            # Clean up zip file
+            Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
+            return $driverFolder
+        } else {
+            Write-Warning "Could not find driver folder with .inf files in extracted archive"
+            return $extractPath
+        }
+    } catch {
+        Write-Warning "Failed to extract IRST driver: $($_.Exception.Message)"
+        return $null
+    }
+}
+
 function Add-DriverToImage {
     param (
         [string]$MountPath,
         [string]$DriverPath,
-        [string]$ImageName
+        [string]$ImageName,
+        [switch]$AutoDownload = $false,
+        [string]$DownloadUrl = ''
     )
+    
+    # If no driver path provided but auto-download is enabled
+    if ((-not $DriverPath -or -not (Test-Path $DriverPath)) -and $AutoDownload) {
+        Write-Host "Auto-downloading IRST driver..."
+        $DriverPath = Get-IrstDriver -DownloadUrl $DownloadUrl
+    }
     
     if (-not $DriverPath -or -not (Test-Path $DriverPath)) {
         Write-Host "IRST driver path not provided or invalid, skipping driver injection."
@@ -1101,8 +1219,8 @@ reg unload HKLM\zSYSTEM | Out-Null
 Write-Host "Cleaning up image..."
 
 # Inject IRST driver into install.wim if provided
-if ($IrstDriverPath) {
-    Add-DriverToImage -MountPath "$mainOSDrive\scratchdir" -DriverPath $IrstDriverPath -ImageName "install.wim"
+if ($IrstDriverPath -or $AutoDownloadIrst) {
+    Add-DriverToImage -MountPath "$mainOSDrive\scratchdir" -DriverPath $IrstDriverPath -ImageName "install.wim" -AutoDownload:$AutoDownloadIrst -DownloadUrl $IrstDriverUrl
 }
 
 Write-Host "Cleaning up image..."
@@ -1163,8 +1281,8 @@ reg unload HKLM\zSOFTWARE | Out-Null
 reg unload HKLM\zSYSTEM | Out-Null
 
 # Inject IRST driver into boot.wim (Windows Setup) if provided
-if ($IrstDriverPath) {
-    Add-DriverToImage -MountPath "$mainOSDrive\scratchdir" -DriverPath $IrstDriverPath -ImageName "boot.wim (Windows Setup)"
+if ($IrstDriverPath -or $AutoDownloadIrst) {
+    Add-DriverToImage -MountPath "$mainOSDrive\scratchdir" -DriverPath $IrstDriverPath -ImageName "boot.wim (Windows Setup)" -AutoDownload:$AutoDownloadIrst -DownloadUrl $IrstDriverUrl
 }
 
 Write-Host "Unmounting image (keeping both indexes intact)..."
