@@ -265,7 +265,8 @@ $foldersToOwn = @(
     "$scratchDir\Program Files (x86)\Microsoft",
     "$scratchDir\Program Files\WindowsApps",
     "$scratchDir\Windows\System32\Microsoft-Edge-Webview",
-    "$scratchDir\Windows\System32\Recovery",
+    # Exclude Recovery folder to preserve WinRE.wim and "Previous Version of Setup" option
+    # "$scratchDir\Windows\System32\Recovery",
     "$scratchDir\Windows\WinSxS",
     "$scratchDir\Windows\assembly",
     "$scratchDir\Windows\System32\InputMethod",
