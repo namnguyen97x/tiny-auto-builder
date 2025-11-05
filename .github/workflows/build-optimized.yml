@@ -370,6 +370,7 @@ jobs:
       
       - name: Build Tiny11 ISO (Optimized with Monitoring)
         shell: pwsh
+        id: build
         env:
           BUILD_TYPE: ${{ github.event.inputs.build_type || inputs.build_type || 'maker' }}
           VERSION_SELECTOR: ${{ github.event.inputs.version_selector || inputs.version_selector || 'Auto' }}
@@ -378,6 +379,7 @@ jobs:
           REMOVE_EDGE: ${{ github.event.inputs.remove_edge || inputs.remove_edge || 'true' }}
           REMOVE_STORE: ${{ github.event.inputs.remove_store || inputs.remove_store || 'true' }}
           REMOVE_DRIVERS: ${{ github.event.inputs.remove_drivers || inputs.remove_drivers || 'printer,scanner,bluetooth,smartcard,tape,rdp' }}
+          ISO_NAME: ${{ github.event.inputs.iso_name || inputs.iso_name || '' }}
         run: |
           $ErrorActionPreference = 'Continue'
           $script:buildFailed = $false
@@ -533,6 +535,14 @@ jobs:
               default { 'maker.iso' }
             }
           }
+          
+          # Save ISO name to environment for artifact upload step
+          $artifactName = $isoName -replace '\.iso$', ''  # Remove .iso extension for artifact name
+          echo "ISO_NAME=$isoName" >> $env:GITHUB_ENV
+          echo "ARTIFACT_NAME=$artifactName" >> $env:GITHUB_ENV
+          Write-Host "ISO filename: $isoName" -ForegroundColor Cyan
+          Write-Host "Artifact name will be: $artifactName" -ForegroundColor Cyan
+          
           $repoRoot = $env:GITHUB_WORKSPACE
           $isoPath = Join-Path $repoRoot $isoName
           
@@ -561,11 +571,9 @@ jobs:
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: ${{ github.event.inputs.build_type || inputs.build_type || 'maker' }}-iso
+          name: ${{ env.ARTIFACT_NAME || format('{0}-iso', github.event.inputs.build_type || inputs.build_type || 'maker') }}
           path: |
-            tiny11.iso
-            tiny11-core.iso
-            nano11.iso
+            *.iso
             *.log
           retention-days: 7
           compression-level: 0
