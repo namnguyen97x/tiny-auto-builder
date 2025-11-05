@@ -380,7 +380,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: ${{ github.event.inputs.build_type || inputs.build_type || 'maker' }}-iso-${{ github.run_number }}
+          name: ${{ github.event.inputs.build_type || inputs.build_type || 'maker' }}-iso
           path: |
             tiny11.iso
             tiny11-core.iso
