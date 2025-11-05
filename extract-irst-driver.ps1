@@ -91,8 +91,8 @@ try {
     Write-Host ""
     Write-Host "Error during extraction: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host ""
-    Write-Host "Try running manually:" -ForegroundColor Yellow
-    Write-Host "  `"$setupRstPath`" -extractdrivers $extractPath" -ForegroundColor White
+    Write-Host "Try running manually with & operator:" -ForegroundColor Yellow
+    Write-Host "  & `"$setupRstPath`" -extractdrivers $extractPath" -ForegroundColor White
 }
 
 Write-Host ""
