@@ -595,6 +595,72 @@ foreach ($shortcutPath in $startMenuPaths) {
     }
 }
 
+# Remove Start Menu shortcuts for debloated apps
+Write-Host "Removing Start Menu shortcuts for debloated apps..."
+$startMenuBasePaths = @(
+    "$scratchDir\ProgramData\Microsoft\Windows\Start Menu\Programs",
+    "$scratchDir\Users\Default\AppData\Roaming\Microsoft\Windows\Start Menu\Programs"
+)
+
+# Apps to remove shortcuts for based on debloat parameters
+$shortcutsToRemove = @()
+
+# Microsoft Edge shortcuts (if RemoveEdge=yes)
+if ($RemoveEdge -eq 'yes') {
+    $shortcutsToRemove += "Microsoft Edge.lnk"
+    $shortcutsToRemove += "Microsoft Edge"
+    $shortcutsToRemove += "Microsoft Edge Update.lnk"
+    $shortcutsToRemove += "Microsoft Edge Update"
+    Write-Host "  Removing Edge shortcuts..."
+}
+
+# Microsoft Store shortcuts (if RemoveStore=yes)
+if ($RemoveStore -eq 'yes') {
+    $shortcutsToRemove += "Microsoft Store.lnk"
+    $shortcutsToRemove += "Microsoft Store"
+    Write-Host "  Removing Store shortcuts..."
+}
+
+# Remove shortcuts from both Start Menu locations
+foreach ($basePath in $startMenuBasePaths) {
+    if (Test-Path $basePath) {
+        foreach ($shortcutName in $shortcutsToRemove) {
+            $shortcutPath = Join-Path $basePath $shortcutName
+            if (Test-Path $shortcutPath) {
+                try {
+                    & 'takeown' '/f' $shortcutPath '/r' 2>&1 | Out-Null
+                    & 'icacls' $shortcutPath '/grant' "$($adminGroup.Value):(F)" '/T' '/C' 2>&1 | Out-Null
+                    Remove-Item -Path $shortcutPath -Recurse -Force -ErrorAction SilentlyContinue
+                } catch {
+                    # Silently continue if shortcut removal fails
+                }
+            }
+        }
+        
+        # Also remove any shortcuts containing "Microsoft Edge" or "Microsoft Store" in their names
+        if ($RemoveEdge -eq 'yes') {
+            Get-ChildItem -Path $basePath -Filter "*Edge*" -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                    & 'takeown' '/f' $_.FullName '/r' 2>&1 | Out-Null
+                    & 'icacls' $_.FullName '/grant' "$($adminGroup.Value):(F)" '/T' '/C' 2>&1 | Out-Null
+                    Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                } catch { }
+            }
+        }
+        
+        if ($RemoveStore -eq 'yes') {
+            Get-ChildItem -Path $basePath -Filter "*Store*" -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                    & 'takeown' '/f' $_.FullName '/r' 2>&1 | Out-Null
+                    & 'icacls' $_.FullName '/grant' "$($adminGroup.Value):(F)" '/T' '/C' 2>&1 | Out-Null
+                    Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                } catch { }
+            }
+        }
+    }
+}
+Write-Host "Start Menu shortcuts cleanup complete."
+
 & 'dism' '/English' "/image:$scratchDir" '/Cleanup-Image' '/StartComponentCleanup' '/ResetBase' 
 
 Write-Host "Taking ownership of the WinSxS folder. This might take a while..."

@@ -612,6 +612,72 @@ if ($EnableDebloat -ne 'yes' -or -not (Get-Module -Name tiny11-debloater)) {
             Remove-Item -Path $shortcutPath -Recurse -Force -ErrorAction SilentlyContinue >null
         }
     }
+    
+    # Remove Start Menu shortcuts for debloated apps
+    Write-Host "Removing Start Menu shortcuts for debloated apps..."
+    $startMenuBasePaths = @(
+        "$mainOSDrive\scratchdir\ProgramData\Microsoft\Windows\Start Menu\Programs",
+        "$mainOSDrive\scratchdir\Users\Default\AppData\Roaming\Microsoft\Windows\Start Menu\Programs"
+    )
+    
+    # Apps to remove shortcuts for based on debloat parameters
+    $shortcutsToRemove = @()
+    
+    # Microsoft Edge shortcuts (if RemoveEdge=yes)
+    if ($RemoveEdge -eq 'yes') {
+        $shortcutsToRemove += "Microsoft Edge.lnk"
+        $shortcutsToRemove += "Microsoft Edge"
+        $shortcutsToRemove += "Microsoft Edge Update.lnk"
+        $shortcutsToRemove += "Microsoft Edge Update"
+        Write-Host "  Removing Edge shortcuts..."
+    }
+    
+    # Microsoft Store shortcuts (if RemoveStore=yes)
+    if ($RemoveStore -eq 'yes') {
+        $shortcutsToRemove += "Microsoft Store.lnk"
+        $shortcutsToRemove += "Microsoft Store"
+        Write-Host "  Removing Store shortcuts..."
+    }
+    
+    # Remove shortcuts from both Start Menu locations
+    foreach ($basePath in $startMenuBasePaths) {
+        if (Test-Path $basePath) {
+            foreach ($shortcutName in $shortcutsToRemove) {
+                $shortcutPath = Join-Path $basePath $shortcutName
+                if (Test-Path $shortcutPath) {
+                    try {
+                        & 'takeown' '/f' $shortcutPath '/r' >null
+                        & 'icacls' $shortcutPath '/grant' "$($adminGroup.Value):(F)" '/T' '/C' >null
+                        Remove-Item -Path $shortcutPath -Recurse -Force -ErrorAction SilentlyContinue >null
+                    } catch {
+                        # Silently continue if shortcut removal fails
+                    }
+                }
+            }
+            
+            # Also remove any shortcuts containing "Microsoft Edge" or "Microsoft Store" in their names
+            if ($RemoveEdge -eq 'yes') {
+                Get-ChildItem -Path $basePath -Filter "*Edge*" -ErrorAction SilentlyContinue | ForEach-Object {
+                    try {
+                        & 'takeown' '/f' $_.FullName '/r' >null
+                        & 'icacls' $_.FullName '/grant' "$($adminGroup.Value):(F)" '/T' '/C' >null
+                        Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue >null
+                    } catch { }
+                }
+            }
+            
+            if ($RemoveStore -eq 'yes') {
+                Get-ChildItem -Path $basePath -Filter "*Store*" -ErrorAction SilentlyContinue | ForEach-Object {
+                    try {
+                        & 'takeown' '/f' $_.FullName '/r' >null
+                        & 'icacls' $_.FullName '/grant' "$($adminGroup.Value):(F)" '/T' '/C' >null
+                        Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue >null
+                    } catch { }
+                }
+            }
+        }
+    }
+    Write-Host "Start Menu shortcuts cleanup complete."
 }
 
 Write-Host "Removal complete!"
