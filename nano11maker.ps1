@@ -404,18 +404,8 @@ foreach ($packagePattern in $packagePatterns) {
     }
 }
 
-# Enable .NET Framework 3.5 automatically for nano build
-Write-Host "Enabling .NET Framework 3.5..."
-try {
-    & 'dism' "/image:$mainOSDrive\scratchdir" '/enable-feature' '/featurename:NetFX3' '/All' "/source:$($env:SystemDrive)\nano11\sources\sxs" 
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host ".NET 3.5 has been enabled successfully." -ForegroundColor Green
-    } else {
-        Write-Warning "Failed to enable .NET 3.5 (exit code: $LASTEXITCODE). Continuing..."
-    }
-} catch {
-    Write-Warning "Error enabling .NET 3.5: $($_.Exception.Message). Continuing..."
-}
+# Note: .NET Framework 3.5 will be enabled AFTER Windows Update services are configured
+# This ensures Windows Update services are available for .NET 3.5 installation in Windows 11 25H2
 
 Write-Host "Removing pre-compiled .NET assemblies (Native Images)..."
 Remove-Item -Path "$scratchDir\Windows\assembly\NativeImages_*" -Recurse -Force -ErrorAction SilentlyContinue
@@ -937,6 +927,55 @@ if ($RemoveDefender -eq 'yes') {
     # Do NOT delete WaaSMedicSVC and UsoSvc - Defender needs them
     Write-Host "Windows Update service kept enabled for Defender definition updates"
     Write-Host "Note: OS updates are disabled, but Defender can still update definitions"
+}
+
+# Enable .NET Framework 3.5 AFTER Windows Update services are configured
+# This ensures Windows Update services are available for .NET 3.5 installation in Windows 11 25H2
+Write-Host "Enabling .NET Framework 3.5..."
+# Ensure Windows Update services are enabled for .NET 3.5 installation
+# Temporarily enable wuauserv if it was disabled (we'll disable it later if RemoveDefender=yes)
+$wasWUDisabled = $false
+try {
+    $wuStartValue = (Get-ItemProperty -Path "HKLM:\zSYSTEM\ControlSet001\Services\wuauserv" -Name "Start" -ErrorAction SilentlyContinue).Start
+    if ($wuStartValue -eq 4) {
+        $wasWUDisabled = $true
+        Write-Host "Temporarily enabling Windows Update service for .NET 3.5 installation..."
+        & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv' '/v' 'Start' '/t' 'REG_DWORD' '/d' '2' '/f' | Out-Null
+    }
+} catch {
+    # Service might not exist yet, continue
+}
+
+# Try to enable .NET 3.5 with local source first (from original ISO)
+$sourcePath = "$DriveLetter\sources\sxs"
+if (-not (Test-Path $sourcePath)) {
+    # Fallback to extracted sources
+    $sourcePath = "$mainOSDrive\nano11\sources\sxs"
+}
+
+Write-Host "Attempting to enable .NET 3.5 using source: $sourcePath"
+try {
+    if (Test-Path $sourcePath) {
+        & 'dism' "/image:$mainOSDrive\scratchdir" '/enable-feature' '/featurename:NetFX3' '/All' "/source:$sourcePath" 2>&1 | Out-Null
+    } else {
+        # If local source not available, try without source (will use Windows Update)
+        Write-Host "Local source not found, attempting to enable .NET 3.5 using Windows Update..."
+        & 'dism' "/image:$mainOSDrive\scratchdir" '/enable-feature' '/featurename:NetFX3' '/All' 2>&1 | Out-Null
+    }
+    
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host ".NET 3.5 has been enabled successfully." -ForegroundColor Green
+    } else {
+        Write-Warning "Failed to enable .NET 3.5 (exit code: $LASTEXITCODE). You may need to install it manually after deployment."
+    }
+} catch {
+    Write-Warning "Error enabling .NET 3.5: $($_.Exception.Message). You may need to install it manually after deployment."
+}
+
+# If Windows Update was temporarily enabled, disable it again if RemoveDefender=yes
+if ($wasWUDisabled -and $RemoveDefender -eq 'yes') {
+    Write-Host "Disabling Windows Update service again (after .NET 3.5 installation)..."
+    & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' | Out-Null
 }
 # Honor RemoveDefender parameter from workflow
 if ($RemoveDefender -eq 'yes') {
