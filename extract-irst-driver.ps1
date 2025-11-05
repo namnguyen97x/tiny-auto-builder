@@ -34,58 +34,56 @@ try {
     
     Write-Host "Extract command executed!" -ForegroundColor Green
     Write-Host ""
+    
+    # Wait a bit for files to be written
+    Start-Sleep -Seconds 3
+    
+    # Check if extraction was successful
+    if (Test-Path $extractPath) {
+        Write-Host "Checking extracted driver files..." -ForegroundColor Cyan
         
-        # Check if extraction was successful
-        if (Test-Path $extractPath) {
-            Write-Host "Checking extracted driver files..." -ForegroundColor Cyan
+        # Find .inf files
+        $infFiles = Get-ChildItem $extractPath -Filter "*.inf" -Recurse -ErrorAction SilentlyContinue
+        
+        if ($infFiles) {
+            Write-Host ""
+            Write-Host "SUCCESS! Driver extracted successfully!" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "Found $($infFiles.Count) .inf file(s)" -ForegroundColor Cyan
             
-            # Find .inf files
-            $infFiles = Get-ChildItem $extractPath -Filter "*.inf" -Recurse -ErrorAction SilentlyContinue
+            # Find the main driver folder (usually contains the .inf files)
+            $driverFolders = $infFiles | Group-Object Directory | Sort-Object Count -Descending
+            $mainDriverFolder = $driverFolders[0].Group[0].Directory.FullName
             
-            if ($infFiles) {
-                Write-Host ""
-                Write-Host "SUCCESS! Driver extracted successfully!" -ForegroundColor Green
-                Write-Host ""
-                Write-Host "Found $($infFiles.Count) .inf file(s)" -ForegroundColor Cyan
-                
-                # Find the main driver folder (usually contains the .inf files)
-                $driverFolders = $infFiles | Group-Object Directory | Sort-Object Count -Descending
-                $mainDriverFolder = $driverFolders[0].Group[0].Directory.FullName
-                
-                Write-Host ""
-                Write-Host "Main driver folder:" -ForegroundColor Yellow
-                Write-Host "  $mainDriverFolder" -ForegroundColor Green
-                Write-Host ""
-                Write-Host "Sample .inf files:" -ForegroundColor Yellow
-                $infFiles | Select-Object -First 5 | ForEach-Object {
-                    Write-Host "  - $($_.Name)" -ForegroundColor Gray
-                }
-                
-                Write-Host ""
-                Write-Host "=== Usage in Script ===" -ForegroundColor Cyan
-                Write-Host "Use this path in your build script:" -ForegroundColor Yellow
-                Write-Host "  .\tiny11maker.ps1 -ISO E -SCRATCH D -IrstDriverPath `"$mainDriverFolder`"" -ForegroundColor White
-                Write-Host ""
-                Write-Host "Or use the root extraction folder:" -ForegroundColor Yellow
-                Write-Host "  .\tiny11maker.ps1 -ISO E -SCRATCH D -IrstDriverPath `"$extractPath`"" -ForegroundColor White
-                
-            } else {
-                Write-Host ""
-                Write-Host "Extraction folder created but no .inf files found." -ForegroundColor Yellow
-                Write-Host "Extracted folder: $extractPath" -ForegroundColor Cyan
-                Write-Host "Please check the folder manually." -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Main driver folder:" -ForegroundColor Yellow
+            Write-Host "  $mainDriverFolder" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "Sample .inf files:" -ForegroundColor Yellow
+            $infFiles | Select-Object -First 5 | ForEach-Object {
+                Write-Host "  - $($_.Name)" -ForegroundColor Gray
             }
+            
+            Write-Host ""
+            Write-Host "=== Usage in Script ===" -ForegroundColor Cyan
+            Write-Host "Use this path in your build script:" -ForegroundColor Yellow
+            Write-Host "  .\tiny11maker.ps1 -ISO E -SCRATCH D -IrstDriverPath `"$mainDriverFolder`"" -ForegroundColor White
+            Write-Host ""
+            Write-Host "Or use the root extraction folder:" -ForegroundColor Yellow
+            Write-Host "  .\tiny11maker.ps1 -ISO E -SCRATCH D -IrstDriverPath `"$extractPath`"" -ForegroundColor White
+            
         } else {
             Write-Host ""
-            Write-Host "Extraction folder was not created." -ForegroundColor Yellow
-            Write-Host "Try running manually:" -ForegroundColor Yellow
-            Write-Host "  `"$setupRstPath`" -extractdrivers $extractPath" -ForegroundColor White
+            Write-Host "Extraction folder created but no .inf files found." -ForegroundColor Yellow
+            Write-Host "Extracted folder: $extractPath" -ForegroundColor Cyan
+            Write-Host "Please check the folder manually." -ForegroundColor Yellow
         }
     } else {
         Write-Host ""
-        Write-Host "Extract process exited with code: $($process.ExitCode)" -ForegroundColor Yellow
-        Write-Host "The driver may still have been extracted. Please check:" -ForegroundColor Yellow
-        Write-Host "  $extractPath" -ForegroundColor Cyan
+        Write-Host "Extraction folder was not created." -ForegroundColor Yellow
+        Write-Host "This may require Administrator privileges." -ForegroundColor Yellow
+        Write-Host "Try running manually with & operator:" -ForegroundColor Yellow
+        Write-Host "  & `"$setupRstPath`" -extractdrivers $extractPath" -ForegroundColor White
     }
 } catch {
     Write-Host ""
@@ -96,4 +94,3 @@ try {
 }
 
 Write-Host ""
-
