@@ -687,7 +687,10 @@ Write-Host "Disabling Sponsored Apps:"
 & 'reg' 'delete' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SuggestedApps' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableConsumerAccountStateContent' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableCloudOptimizedContent' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
-Write-Host "Enabling Local Accounts on OOBE:"
+Write-Host "Enabling Local Accounts on OOBE (Windows 11 25H2+ compatible):"
+# BypassNRO no longer works from Windows 11 25H2+, use ms-cxh:localonly URI scheme instead
+& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' '/v' 'OOBELocalAccount' '/t' 'REG_SZ' '/d' 'start ms-cxh:localonly' '/f' | Out-Null
+# Keep BypassNRO for older Windows versions compatibility
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' '/v' 'BypassNRO' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 # Ensure Sysprep directory exists before copying autounattend.xml
 $sysprepDir = "$mainOSDrive\scratchdir\Windows\System32\Sysprep"

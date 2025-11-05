@@ -387,6 +387,9 @@ function Apply-DebloatRegistryTweaks {
     # OOBE Tweaks
     if ($TweakOOBE) {
         Write-Output "  Tweaking OOBE..."
+        # BypassNRO no longer works from Windows 11 25H2+, use ms-cxh:localonly URI scheme instead
+        Set-RegValue "SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" "OOBELocalAccount" "REG_SZ" "start ms-cxh:localonly"
+        # Keep BypassNRO for older Windows versions compatibility
         Set-RegValue "SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" "BypassNRO" "REG_DWORD" "1"
     }
     

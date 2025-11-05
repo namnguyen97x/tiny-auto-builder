@@ -664,7 +664,10 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
         -DisableUselessJunks:$true
 }
 
-Write-Output "Enabling Local Accounts on OOBE:"
+Write-Output "Enabling Local Accounts on OOBE (Windows 11 25H2+ compatible):"
+# BypassNRO no longer works from Windows 11 25H2+, use ms-cxh:localonly URI scheme instead
+Set-RegistryValue 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' 'OOBELocalAccount' 'REG_SZ' 'start ms-cxh:localonly'
+# Keep BypassNRO for older Windows versions compatibility
 Set-RegistryValue 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' 'BypassNRO' 'REG_DWORD' '1'
 # Ensure Sysprep directory exists before copying autounattend.xml
 $sysprepDir = "$ScratchDisk\scratchdir\Windows\System32\Sysprep"
