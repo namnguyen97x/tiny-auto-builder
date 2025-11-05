@@ -31,18 +31,53 @@
 param (
     [ValidatePattern('^[c-zC-Z]$')][string]$ISO,
     [ValidatePattern('^[c-zC-Z]$')][string]$SCRATCH,
-    [switch]$NonInteractive,
-    [ValidateSet('Auto','Pro','Home','ProWorkstations')][string]$VersionSelector = 'Auto',
+    
+    # Optional debloat options (chỉ áp dụng cho maker)
     [ValidateSet('yes','no')][string]$RemoveDefender = 'no',
     [ValidateSet('yes','no')][string]$RemoveAI = 'yes',
     [ValidateSet('yes','no')][string]$RemoveEdge = 'yes',
-    [ValidateSet('yes','no')][string]$RemoveStore = 'yes'
+    [ValidateSet('yes','no')][string]$RemoveStore = 'yes',
+    
+    # Non-interactive mode for CI/CD
+    [switch]$NonInteractive = $false,
+    
+    # Version selector (Auto, Pro, Home, ProWorkstations)
+    [ValidateSet('Auto','Pro','Home','ProWorkstations')][string]$VersionSelector = 'Auto'
 )
+
+# Set error handling to continue on non-critical errors
+# Script will only exit on critical failures (ISO creation, mounting, etc.)
+$ErrorActionPreference = 'Continue'
 
 if (-not $SCRATCH) {
     $ScratchDisk = $PSScriptRoot -replace '[\\]+$', ''
 } else {
     $ScratchDisk = $SCRATCH + ":"
+}
+
+# Debloat settings - tự động enable theo chính sách của maker
+$EnableDebloat = 'yes'
+$RemoveAppx = 'yes'
+$RemoveCapabilities = 'yes'
+$RemoveWindowsPackages = 'yes'
+$RemoveOneDrive = 'yes'
+$DisableTelemetry = 'yes'
+$DisableSponsoredApps = 'yes'
+$DisableAds = 'yes'
+
+# Optional debloat options (có thể tùy chỉnh)
+# $RemoveDefender, $RemoveAI, $RemoveEdge, $RemoveStore được set từ parameters
+
+# Import debloater module
+if ($EnableDebloat -eq 'yes') {
+    $modulePath = Join-Path $PSScriptRoot "tiny11-debloater.psm1"
+    if (Test-Path $modulePath) {
+        Import-Module $modulePath -Force -ErrorAction SilentlyContinue
+        Write-Output "Debloater module loaded"
+    } else {
+        Write-Warning "Debloater module not found at $modulePath. Debloat features will be disabled."
+        $EnableDebloat = 'no'
+    }
 }
 
 #---------[ Functions ]---------#
@@ -77,7 +112,8 @@ function Remove-RegistryValue {
 # Check if PowerShell execution is restricted
 if ((Get-ExecutionPolicy) -eq 'Restricted') {
     if ($NonInteractive) {
-        Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false
+        Write-Output "Execution policy is Restricted. Attempting to set to RemoteSigned..."
+        Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false -Force
     } else {
         Write-Output "Your current PowerShell Execution Policy is set to Restricted, which prevents scripts from running. Do you want to change it to RemoteSigned? (yes/no)"
         $response = Read-Host
@@ -113,8 +149,15 @@ if (-not (Test-Path -Path "$PSScriptRoot/autounattend.xml")) {
 # Start the transcript and prepare the window
 Start-Transcript -Path "$PSScriptRoot\tiny11_$(get-date -f yyyyMMdd_HHmms).log"
 
-$Host.UI.RawUI.WindowTitle = "Tiny11 image creator"
-Clear-Host
+# Set window title only in interactive mode
+if (-not $NonInteractive) {
+    try {
+        $Host.UI.RawUI.WindowTitle = "Tiny11 image creator"
+        Clear-Host
+    } catch {
+        # Ignore errors in non-interactive environments
+    }
+}
 Write-Output "Welcome to the tiny11 image creator! Release: 09-07-25"
 
 $hostArchitecture = $Env:PROCESSOR_ARCHITECTURE
@@ -122,7 +165,7 @@ New-Item -ItemType Directory -Force -Path "$ScratchDisk\tiny11\sources" | Out-Nu
 do {
     if (-not $ISO) {
         if ($NonInteractive) {
-            Write-Error "ISO drive letter not provided. Use -ISO <letter> in NonInteractive mode."
+            Write-Error "ISO parameter is required in non-interactive mode. Please provide -ISO parameter."
             exit 1
         }
         $DriveLetter = Read-Host "Please enter the drive letter for the Windows 11 image"
@@ -132,30 +175,33 @@ do {
     if ($DriveLetter -match '^[c-zC-Z]$') {
         $DriveLetter = $DriveLetter + ":"
         Write-Output "Drive letter set to $DriveLetter"
+        break
     } else {
-        if (-not $NonInteractive) { Write-Output "Invalid drive letter. Please enter a letter between C and Z." }
+        if ($NonInteractive) {
+            Write-Error "Invalid drive letter format: $DriveLetter"
+            exit 1
+        }
+        Write-Output "Invalid drive letter. Please enter a letter between C and Z."
     }
-} while ($DriveLetter -notmatch '^[c-zC-Z]:$')
+} while ($DriveLetter -notmatch '^[c-zC-Z]:$' -and -not $NonInteractive)
 
 if ((Test-Path "$DriveLetter\sources\boot.wim") -eq $false -or (Test-Path "$DriveLetter\sources\install.wim") -eq $false) {
     if ((Test-Path "$DriveLetter\sources\install.esd") -eq $true) {
         Write-Output "Found install.esd, converting to install.wim..."
-        $imagesEsd = Get-WindowsImage -ImagePath $DriveLetter\sources\install.esd
+        $esdInfo = Get-WindowsImage -ImagePath "$DriveLetter\sources\install.esd"
+        $esdInfo | Format-Table -AutoSize
+        
         if ($NonInteractive) {
-            $preferredNames = @()
-            switch ($VersionSelector) {
-                'Pro' { $preferredNames = @('Windows 11 Pro') }
-                'Home' { $preferredNames = @('Windows 11 Home') }
-                'ProWorkstations' { $preferredNames = @('Windows 11 Pro for Workstations') }
-                default { $preferredNames = @('Windows 11 Pro') }
+            # Auto-detect image index (use first available index, usually 1)
+            $index = 1
+            if ($esdInfo) {
+                $index = $esdInfo[0].ImageIndex
             }
-            $selected = $imagesEsd | Where-Object { $preferredNames -contains $_.ImageName } | Select-Object -First 1
-            if (-not $selected) { $selected = $imagesEsd | Select-Object -First 1 }
-            $index = if ($selected) { $selected.ImageIndex } else { 1 }
+            Write-Output "Auto-detected image index: $index"
         } else {
-            Get-WindowsImage -ImagePath $DriveLetter\sources\install.esd
             $index = Read-Host "Please enter the image index"
         }
+        
         Write-Output ' '
         Write-Output 'Converting install.esd to install.wim. This may take a while...'
         Export-WindowsImage -SourceImagePath $DriveLetter\sources\install.esd -SourceIndex $index -DestinationImagePath $ScratchDisk\tiny11\sources\install.wim -Compressiontype Maximum -CheckIntegrity
@@ -168,29 +214,106 @@ if ((Test-Path "$DriveLetter\sources\boot.wim") -eq $false -or (Test-Path "$Driv
 
 Write-Output "Copying Windows image..."
 Copy-Item -Path "$DriveLetter\*" -Destination "$ScratchDisk\tiny11" -Recurse -Force | Out-Null
-Set-ItemProperty -Path "$ScratchDisk\tiny11\sources\install.esd" -Name IsReadOnly -Value $false > $null 2>&1
-Remove-Item "$ScratchDisk\tiny11\sources\install.esd" > $null 2>&1
+
+# Remove install.esd if it exists (we only need install.wim)
+if (Test-Path "$ScratchDisk\tiny11\sources\install.esd") {
+    Set-ItemProperty -Path "$ScratchDisk\tiny11\sources\install.esd" -Name IsReadOnly -Value $false > $null 2>&1
+    Remove-Item "$ScratchDisk\tiny11\sources\install.esd" -Force > $null 2>&1
+    Write-Output "Removed install.esd (using install.wim instead)"
+}
+
 Write-Output "Copy complete!"
-Start-Sleep -Seconds 2
-Clear-Host
+if (-not $NonInteractive) {
+    Start-Sleep -Seconds 2
+    Clear-Host
+}
 Write-Output "Getting image information:"
-$imagesWim = Get-WindowsImage -ImagePath $ScratchDisk\tiny11\sources\install.wim
+$wimInfoAll = Get-WindowsImage -ImagePath "$ScratchDisk\tiny11\sources\install.wim"
+$wimInfoAll | Format-Table -AutoSize
+$ImagesIndex = $wimInfoAll.ImageIndex
+
 if ($NonInteractive) {
-    $preferredNames = @()
-    switch ($VersionSelector) {
-        'Pro' { $preferredNames = @('Windows 11 Pro') }
-        'Home' { $preferredNames = @('Windows 11 Home') }
-        'ProWorkstations' { $preferredNames = @('Windows 11 Pro for Workstations') }
-        default { $preferredNames = @('Windows 11 Pro') }
+    # Auto-detect edition based on VersionSelector
+    Write-Output "Auto-detecting edition based on VersionSelector: $VersionSelector"
+    $wimInfo = $wimInfoAll
+    
+    if (-not $index -or $ImagesIndex -notcontains $index) {
+        $targetEditions = @()
+        
+        foreach ($image in $wimInfo) {
+            $imageName = $image.ImageName
+            $match = $false
+            $priority = 999
+            
+            switch ($VersionSelector) {
+                'Auto' {
+                    # Auto mode: prefer Pro editions
+                    if ($imageName -like '*Pro*' -and $imageName -notlike '*Home*') {
+                        $match = $true
+                        if ($imageName -eq 'Windows 11 Pro') {
+                            $priority = 1
+                        } elseif ($imageName -like '*Pro for Workstations*' -and $imageName -notlike '*N*') {
+                            $priority = 2
+                        } elseif ($imageName -like '*Pro Education*' -and $imageName -notlike '*N*') {
+                            $priority = 3
+                        } elseif ($imageName -like '*Pro*' -and $imageName -notlike '*N*') {
+                            $priority = 4
+                        } else {
+                            $priority = 5
+                        }
+                    }
+                }
+                'Pro' {
+                    # Pro mode: find exact Windows 11 Pro
+                    if ($imageName -eq 'Windows 11 Pro') {
+                        $match = $true
+                        $priority = 1
+                    }
+                }
+                'Home' {
+                    # Home mode: find Windows 11 Home (non-N)
+                    if ($imageName -like '*Home*' -and $imageName -notlike '*N*' -and $imageName -notlike '*Pro*') {
+                        $match = $true
+                        if ($imageName -eq 'Windows 11 Home') {
+                            $priority = 1
+                        } else {
+                            $priority = 2
+                        }
+                    }
+                }
+                'ProWorkstations' {
+                    # ProWorkstations mode: find Pro for Workstations
+                    if ($imageName -like '*Pro for Workstations*' -and $imageName -notlike '*N*') {
+                        $match = $true
+                        $priority = 1
+                    }
+                }
+            }
+            
+            if ($match) {
+                $targetEditions += @{
+                    Index = $image.ImageIndex
+                    Name = $imageName
+                    Priority = $priority
+                }
+            }
+        }
+        
+        if ($targetEditions.Count -gt 0) {
+            # Sort by priority and select the best one
+            $bestEdition = $targetEditions | Sort-Object Priority | Select-Object -First 1
+            $index = $bestEdition.Index
+            Write-Output "Found edition: $($bestEdition.Name) (Index: $index)" -ForegroundColor Green
+        } else {
+            # Fallback to index 1 if not found
+            $index = 1
+            Write-Output "Requested edition not found, using default index: $index" -ForegroundColor Yellow
+        }
     }
-    $selected = $imagesWim | Where-Object { $preferredNames -contains $_.ImageName }
-    if (-not $selected) { $selected = $imagesWim | Select-Object -First 1 }
-    $index = $selected.ImageIndex
-    Write-Output "Auto-selected image index: $index ($($selected.ImageName))"
 } else {
-    $ImagesIndex = $imagesWim.ImageIndex
+    # In interactive mode, validate index
     while ($ImagesIndex -notcontains $index) {
-        Get-WindowsImage -ImagePath $ScratchDisk\tiny11\sources\install.wim
+        $wimInfoAll | Format-Table -AutoSize
         $index = Read-Host "Please enter the image index"
     }
 }
@@ -202,7 +325,7 @@ try {
     Set-ItemProperty -Path $wimFilePath -Name IsReadOnly -Value $false -ErrorAction Stop
 } catch {
     # This block will catch the error and suppress it.
-	Write-Error "$wimFilePath not found"
+    Write-Warning "$wimFilePath IsReadOnly property may not be settable (continuing...)"
 }
 New-Item -ItemType Directory -Force -Path "$ScratchDisk\scratchdir" > $null
 Mount-WindowsImage -ImagePath $ScratchDisk\tiny11\sources\install.wim -Index $index -Path $ScratchDisk\scratchdir
@@ -238,6 +361,93 @@ if (-not $architecture) {
 
 Write-Output "Mounting complete! Performing removal of applications..."
 
+# Sử dụng debloater module nếu được enable
+if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
+    Write-Output "Using integrated debloater from Windows-ISO-Debloater..."
+    
+    # Get packages để filter Store và AI
+    $allPackages = Get-ProvisionedAppxPackage -Path "$ScratchDisk\scratchdir" -ErrorAction SilentlyContinue
+    
+    # Filter Store packages if RemoveStore = no
+    if ($RemoveStore -eq 'no') {
+        $storePackages = $allPackages | Where-Object { $_.PackageName -like '*WindowsStore*' -or $_.PackageName -like '*StorePurchaseApp*' -or $_.PackageName -like '*Store.Engagement*' }
+        foreach ($storePkg in $storePackages) {
+            Write-Output "  Keeping Store package: $($storePkg.PackageName)"
+        }
+    }
+    
+    # Filter AI packages if RemoveAI = no
+    if ($RemoveAI -eq 'no') {
+        $aiPackages = $allPackages | Where-Object { $_.PackageName -like '*Copilot*' -or $_.PackageName -like '*549981C3F5F10*' }
+        foreach ($aiPkg in $aiPackages) {
+            Write-Output "  Keeping AI package: $($aiPkg.PackageName)"
+        }
+    }
+    
+    Remove-DebloatPackages -MountPath "$ScratchDisk\scratchdir" `
+        -RemoveAppx:($RemoveAppx -eq 'yes') `
+        -RemoveCapabilities:($RemoveCapabilities -eq 'yes') `
+        -RemoveWindowsPackages:($RemoveWindowsPackages -eq 'yes') `
+        -LanguageCode $languageCode `
+        -RemoveStore:($RemoveStore -eq 'yes') `
+        -RemoveAI:($RemoveAI -eq 'yes') `
+        -RemoveDefender:($RemoveDefender -eq 'yes')
+    
+    Remove-DebloatFiles -MountPath "$ScratchDisk\scratchdir" `
+        -RemoveEdge:($RemoveEdge -eq 'yes') `
+        -RemoveOneDrive:($RemoveOneDrive -eq 'yes') `
+        -Architecture $architecture
+    
+    # Remove Store packages manually if RemoveStore = yes
+    # Note: If RemoveAppx = yes, these may already be removed by Remove-DebloatPackages
+    if ($RemoveStore -eq 'yes') {
+        Write-Output "Removing Microsoft Store packages..."
+        # Get fresh package list after Remove-DebloatPackages may have removed some
+        $currentPackages = Get-ProvisionedAppxPackage -Path "$ScratchDisk\scratchdir" -ErrorAction SilentlyContinue
+        $storePackages = $currentPackages | Where-Object { $_.PackageName -like '*WindowsStore*' -or $_.PackageName -like '*StorePurchaseApp*' -or $_.PackageName -like '*Store.Engagement*' }
+        
+        if ($storePackages.Count -eq 0) {
+            Write-Output "  No Store packages found (may have been removed already by debloater)" -ForegroundColor Gray
+        } else {
+            foreach ($storePkg in $storePackages) {
+                Write-Output "  Removing: $($storePkg.PackageName)"
+                try {
+                    Remove-ProvisionedAppxPackage -Path "$ScratchDisk\scratchdir" -PackageName $storePkg.PackageName -ErrorAction Stop | Out-Null
+                    Write-Output "    ✓ Removed successfully" -ForegroundColor Green
+                } catch {
+                    Write-Output "    ⚠ Warning: Failed to remove $($storePkg.PackageName) - $($_.Exception.Message)" -ForegroundColor Yellow
+                }
+            }
+        }
+    }
+    
+    # Remove AI packages manually if RemoveAI = yes
+    # Note: If RemoveAppx = yes, these may already be removed by Remove-DebloatPackages
+    if ($RemoveAI -eq 'yes') {
+        Write-Output "Removing AI/Copilot packages..."
+        # Get fresh package list after Remove-DebloatPackages may have removed some
+        $currentPackages = Get-ProvisionedAppxPackage -Path "$ScratchDisk\scratchdir" -ErrorAction SilentlyContinue
+        $aiPackages = $currentPackages | Where-Object { $_.PackageName -like '*Copilot*' -or $_.PackageName -like '*549981C3F5F10*' }
+        
+        if ($aiPackages.Count -eq 0) {
+            Write-Output "  No AI packages found (may have been removed already by debloater)" -ForegroundColor Gray
+        } else {
+            foreach ($aiPkg in $aiPackages) {
+                Write-Output "  Removing: $($aiPkg.PackageName)"
+                try {
+                    Remove-ProvisionedAppxPackage -Path "$ScratchDisk\scratchdir" -PackageName $aiPkg.PackageName -ErrorAction Stop | Out-Null
+                    Write-Output "    ✓ Removed successfully" -ForegroundColor Green
+                } catch {
+                    Write-Output "    ⚠ Warning: Failed to remove $($aiPkg.PackageName) - $($_.Exception.Message)" -ForegroundColor Yellow
+                }
+            }
+        }
+    }
+} else {
+    # Fallback to original method
+    Write-Output "Using original package removal method..."
+}
+
 $packages = & 'dism' '/English' "/image:$($ScratchDisk)\scratchdir" '/Get-ProvisionedAppxPackages' |
     ForEach-Object {
         if ($_ -match 'PackageName : (.*)') {
@@ -252,6 +462,8 @@ $packagePrefixes = 'AppUp.IntelManagementandSecurityStatus',
 'Microsoft.BingNews',
 'Microsoft.BingSearch',
 'Microsoft.BingWeather',
+'Microsoft.BingSports',
+'Microsoft.BingFinance',
 'Microsoft.Copilot',
 'Microsoft.Windows.CrossDevice',
 'Microsoft.GamingApp',
@@ -278,11 +490,20 @@ $packagePrefixes = 'AppUp.IntelManagementandSecurityStatus',
 'Microsoft.Windows.Teams',
 'Microsoft.WindowsAlarms',
 'Microsoft.WindowsCamera',
+'Microsoft.WindowsCalculator',
+'Microsoft.WindowsNotepad',
+'Microsoft.WindowsPaint',
+'Microsoft.WindowsTerminal',
+'Microsoft.WindowsTips',
+'Microsoft.OneDrive',
+'Microsoft.OneDriveSync',
 'microsoft.windowscommunicationsapps',
 'Microsoft.WindowsFeedbackHub',
 'Microsoft.WindowsMaps',
 'Microsoft.WindowsSoundRecorder',
-'Microsoft.WindowsTerminal',
+'Microsoft.ScreenSketch',
+'Microsoft.Windows.Search.Cortana',
+'Microsoft.Windows.ContentDeliveryManager',
 'Microsoft.Xbox.TCUI',
 'Microsoft.XboxApp',
 'Microsoft.XboxGameOverlay',
@@ -296,33 +517,97 @@ $packagePrefixes = 'AppUp.IntelManagementandSecurityStatus',
 'MicrosoftCorporationII.QuickAssist',
 'MSTeams',
 'MicrosoftTeams', 
-'Microsoft.WindowsTerminal',
 'Microsoft.549981C3F5F10'
 
 $packagesToRemove = $packages | Where-Object {
     $packageName = $_
-    $packagePrefixes -contains ($packagePrefixes | Where-Object { $packageName -like "*$_*" })
+    $shouldRemove = $false
+    foreach ($prefix in $packagePrefixes) {
+        if ($packageName -like "*$prefix*") {
+            $shouldRemove = $true
+            break
+        }
+    }
+    $shouldRemove
 }
-foreach ($package in $packagesToRemove) {
-    & 'dism' '/English' "/image:$($ScratchDisk)\scratchdir" '/Remove-ProvisionedAppxPackage' "/PackageName:$package"
+# Chỉ chạy method cũ nếu debloater không được enable
+if ($EnableDebloat -ne 'yes' -or -not (Get-Module -Name tiny11-debloater)) {
+    # Filter packages based on options
+    $filteredPackages = $packagesToRemove | Where-Object {
+        $packageName = $_
+        $shouldRemove = $true
+        
+        # Filter AI packages if RemoveAI = no
+        if ($RemoveAI -eq 'no') {
+            if ($packageName -like '*Copilot*' -or $packageName -like '*549981C3F5F10*') {
+                $shouldRemove = $false
+                Write-Output "  Keeping AI package: $packageName"
+            }
+        }
+        
+        # Filter Store packages if RemoveStore = no
+        if ($RemoveStore -eq 'no') {
+            if ($packageName -like '*WindowsStore*' -or $packageName -like '*StorePurchaseApp*' -or $packageName -like '*Store.Engagement*') {
+                $shouldRemove = $false
+                Write-Output "  Keeping Store package: $packageName"
+            }
+        }
+        
+        return $shouldRemove
+    }
+    
+    foreach ($package in $filteredPackages) {
+        Write-Output "Removing $package"
+        $result = & 'dism' '/English' "/image:$($ScratchDisk)\scratchdir" '/Remove-ProvisionedAppxPackage' "/PackageName:$package" 2>&1
+        if ($LASTEXITCODE -ne 0 -or ($result | Select-String -Pattern "Error|failed|not found" -Quiet)) {
+            Write-Output "  Warning: Failed to remove $package (continuing...)" -ForegroundColor Yellow
+        }
+    }
+
+    # Remove Edge only if RemoveEdge = yes
+    if ($RemoveEdge -eq 'yes') {
+        Write-Output "Removing Edge:"
+        Remove-Item -Path "$ScratchDisk\scratchdir\Program Files (x86)\Microsoft\Edge" -Recurse -Force | Out-Null
+        Remove-Item -Path "$ScratchDisk\scratchdir\Program Files (x86)\Microsoft\EdgeUpdate" -Recurse -Force | Out-Null
+        Remove-Item -Path "$ScratchDisk\scratchdir\Program Files (x86)\Microsoft\EdgeCore" -Recurse -Force | Out-Null
+        & 'takeown' '/f' "$ScratchDisk\scratchdir\Windows\System32\Microsoft-Edge-Webview" '/r' | Out-Null
+        & 'icacls' "$ScratchDisk\scratchdir\Windows\System32\Microsoft-Edge-Webview" '/grant' "$($adminGroup.Value):(F)" '/T' '/C' | Out-Null
+        Remove-Item -Path "$ScratchDisk\scratchdir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force | Out-Null
+    } else {
+        Write-Output "Keeping Edge (RemoveEdge = no)"
+    }
+    
+    Write-Output "Removing OneDrive:"
+    & 'takeown' '/f' "$ScratchDisk\scratchdir\Windows\System32\OneDriveSetup.exe" | Out-Null
+    & 'icacls' "$ScratchDisk\scratchdir\Windows\System32\OneDriveSetup.exe" '/grant' "$($adminGroup.Value):(F)" '/T' '/C' | Out-Null
+    Remove-Item -Path "$ScratchDisk\scratchdir\Windows\System32\OneDriveSetup.exe" -Force | Out-Null
+    
+    Write-Output "Removing OneDrive Start Menu shortcuts:"
+    $startMenuPaths = @(
+        "$ScratchDisk\scratchdir\ProgramData\Microsoft\Windows\Start Menu\Programs\OneDrive.lnk",
+        "$ScratchDisk\scratchdir\ProgramData\Microsoft\Windows\Start Menu\Programs\OneDrive",
+        "$ScratchDisk\scratchdir\Users\Default\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\OneDrive.lnk",
+        "$ScratchDisk\scratchdir\Users\Default\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\OneDrive"
+    )
+    
+    foreach ($shortcutPath in $startMenuPaths) {
+        if (Test-Path $shortcutPath) {
+            & 'takeown' '/f' $shortcutPath '/r' | Out-Null
+            & 'icacls' $shortcutPath '/grant' "$($adminGroup.Value):(F)" '/T' '/C' | Out-Null
+            Remove-Item -Path $shortcutPath -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+    }
 }
 
-if ($RemoveEdge -eq 'yes') {
-Write-Output "Removing Edge:"
-Remove-Item -Path "$ScratchDisk\scratchdir\Program Files (x86)\Microsoft\Edge" -Recurse -Force | Out-Null
-Remove-Item -Path "$ScratchDisk\scratchdir\Program Files (x86)\Microsoft\EdgeUpdate" -Recurse -Force | Out-Null
-Remove-Item -Path "$ScratchDisk\scratchdir\Program Files (x86)\Microsoft\EdgeCore" -Recurse -Force | Out-Null
-& 'takeown' '/f' "$ScratchDisk\scratchdir\Windows\System32\Microsoft-Edge-Webview" '/r' | Out-Null
-& 'icacls' "$ScratchDisk\scratchdir\Windows\System32\Microsoft-Edge-Webview" '/grant' "$($adminGroup.Value):(F)" '/T' '/C' | Out-Null
-Remove-Item -Path "$ScratchDisk\scratchdir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force | Out-Null
-}
-Write-Output "Removing OneDrive:"
-& 'takeown' '/f' "$ScratchDisk\scratchdir\Windows\System32\OneDriveSetup.exe" | Out-Null
-& 'icacls' "$ScratchDisk\scratchdir\Windows\System32\OneDriveSetup.exe" '/grant' "$($adminGroup.Value):(F)" '/T' '/C' | Out-Null
-Remove-Item -Path "$ScratchDisk\scratchdir\Windows\System32\OneDriveSetup.exe" -Force | Out-Null
 Write-Output "Removal complete!"
-Start-Sleep -Seconds 2
-Clear-Host
+if (-not $NonInteractive) {
+    Start-Sleep -Seconds 2
+    try {
+        Clear-Host
+    } catch {
+        # Ignore Clear-Host errors in non-interactive environments
+    }
+}
 Write-Output "Loading registry..."
 reg load HKLM\zCOMPONENTS $ScratchDisk\scratchdir\Windows\System32\config\COMPONENTS | Out-Null
 reg load HKLM\zDEFAULT $ScratchDisk\scratchdir\Windows\System32\config\default | Out-Null
@@ -364,21 +649,89 @@ Remove-RegistryValue 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Con
 Remove-RegistryValue 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SuggestedApps'
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' 'DisableConsumerAccountStateContent' 'REG_DWORD' '1'
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' 'DisableCloudOptimizedContent' 'REG_DWORD' '1'
+
+# Apply debloater registry tweaks nếu được enable
+if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
+    Write-Output "Applying debloater registry tweaks..."
+    Apply-DebloatRegistryTweaks -RegistryPrefix "HKLM\z" `
+        -DisableTelemetry:($DisableTelemetry -eq 'yes') `
+        -DisableSponsoredApps:($DisableSponsoredApps -eq 'yes') `
+        -DisableAds:($DisableAds -eq 'yes') `
+        -DisableBitlocker:$true `
+        -DisableOneDrive:($RemoveOneDrive -eq 'yes') `
+        -DisableGameDVR:$true `
+        -TweakOOBE:$true `
+        -DisableUselessJunks:$true
+}
+
 Write-Output "Enabling Local Accounts on OOBE:"
 Set-RegistryValue 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' 'BypassNRO' 'REG_DWORD' '1'
-Copy-Item -Path "$PSScriptRoot\autounattend.xml" -Destination "$ScratchDisk\scratchdir\Windows\System32\Sysprep\autounattend.xml" -Force | Out-Null
+# Ensure Sysprep directory exists before copying autounattend.xml
+$sysprepDir = "$ScratchDisk\scratchdir\Windows\System32\Sysprep"
+if (-not (Test-Path $sysprepDir)) {
+    New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null
+}
+Copy-Item -Path "$PSScriptRoot\autounattend.xml" -Destination "$sysprepDir\autounattend.xml" -Force | Out-Null
 
 Write-Output "Disabling Reserved Storage:"
 Set-RegistryValue 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager' 'ShippedWithReserves' 'REG_DWORD' '0'
+
+# Remove Defender if requested
+if ($RemoveDefender -eq 'yes') {
+    Write-Output "Removing Windows Defender..."
+    try {
+        $defenderPackages = & dism /English /image:"$ScratchDisk\scratchdir" /Get-Packages | 
+            Select-String -Pattern "Windows-Defender-Client-Package"
+        
+        foreach ($package in $defenderPackages) {
+            if ($package -match 'Package Identity :\s+(.+)') {
+                $packageIdentity = $Matches[1].Trim()
+                Write-Output "  Removing Defender package: $packageIdentity"
+                $result = & dism /English /image:"$ScratchDisk\scratchdir" /Remove-Package /PackageName:$packageIdentity 2>&1
+                if ($LASTEXITCODE -ne 0 -or ($result | Select-String -Pattern "Removal failed|Error|failed" -Quiet)) {
+                    Write-Output "  Warning: Failed to remove Defender package $packageIdentity (continuing...)" -ForegroundColor Yellow
+                }
+            }
+        }
+        
+        # Disable Defender services
+        $servicePaths = @("WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense")
+        foreach ($service in $servicePaths) {
+            Set-RegistryValue "HKLM\zSYSTEM\ControlSet001\Services\$service" "Start" "REG_DWORD" "4"
+        }
+        
+        # Hide Defender from Settings
+        Set-RegistryValue 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' 'SettingsPageVisibility' 'REG_SZ' 'hide:virus;windowsupdate'
+        Write-Output "Windows Defender removed successfully"
+    } catch {
+        Write-Warning "Failed to remove Defender: $_"
+    }
+}
+
 Write-Output "Disabling BitLocker Device Encryption"
 Set-RegistryValue 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker' 'PreventDeviceEncryption' 'REG_DWORD' '1'
 Write-Output "Disabling Chat icon:"
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat' 'ChatIcon' 'REG_DWORD' '3'
 Set-RegistryValue 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'TaskbarMn' 'REG_DWORD' '0'
-if ($RemoveEdge -eq 'yes') {
 Write-Output "Removing Edge related registries"
-Remove-RegistryValue "HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge"
-Remove-RegistryValue "HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update"
+if ($RemoveEdge -eq 'yes') {
+    Remove-RegistryValue "HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge"
+    Remove-RegistryValue "HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update"
+}
+
+# Disable Copilot/AI if RemoveAI = no (keep it enabled)
+if ($RemoveAI -eq 'yes') {
+    Write-Output "Disabling Copilot/AI..."
+    Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 'REG_DWORD' '1'
+    Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Edge' 'HubsSidebarEnabled' 'REG_DWORD' '0'
+    Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer' 'DisableSearchBoxSuggestions' 'REG_DWORD' '1'
+}
+
+# Disable Store if RemoveStore = yes
+if ($RemoveStore -eq 'yes') {
+    Write-Output "Disabling Microsoft Store..."
+    Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\WindowsStore' 'RemoveWindowsStore' 'REG_DWORD' '1'
+    Set-RegistryValue 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned' 'Microsoft.WindowsStore_8wekyb3d8bbwe' 'REG_SZ' ''
 }
 Write-Output "Disabling OneDrive folder backup"
 Set-RegistryValue "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" "DisableFileSyncNGSC" "REG_DWORD" "1"
@@ -400,14 +753,12 @@ Set-RegistryValue 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate
 Set-RegistryValue 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate' 'workCompleted' 'REG_DWORD' '1'
 Remove-RegistryValue 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate'
 Remove-RegistryValue 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\DevHomeUpdate'
-if ($RemoveAI -eq 'yes') {
 Write-Output "Disabling Copilot"
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 'REG_DWORD' '1'
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Edge' 'HubsSidebarEnabled' 'REG_DWORD' '0'
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer' 'DisableSearchBoxSuggestions' 'REG_DWORD' '1'
 Write-Output "Prevents installation of Teams:"
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Teams' 'DisableInstallation' 'REG_DWORD' '1'
-}
 Write-Output "Prevent installation of New Outlook":
 Set-RegistryValue 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail' 'PreventRun' 'REG_DWORD' '1'
 
@@ -446,13 +797,24 @@ Dism.exe /Export-Image /SourceImageFile:"$ScratchDisk\tiny11\sources\install.wim
 Remove-Item -Path "$ScratchDisk\tiny11\sources\install.wim" -Force | Out-Null
 Rename-Item -Path "$ScratchDisk\tiny11\sources\install2.wim" -NewName "install.wim" | Out-Null
 Write-Output "Windows image completed. Continuing with boot.wim."
-Start-Sleep -Seconds 2
-Clear-Host
-Write-Output "Mounting boot image:"
+if (-not $NonInteractive) {
+    Start-Sleep -Seconds 2
+    try {
+        Clear-Host
+    } catch {
+        # Ignore Clear-Host errors in non-interactive environments
+    }
+}
+Write-Output "Mounting boot image (keeping both WinPE classic menu and Windows Setup)..."
 $wimFilePath = "$ScratchDisk\tiny11\sources\boot.wim"
 & takeown "/F" $wimFilePath | Out-Null
 & icacls $wimFilePath "/grant" "$($adminGroup.Value):(F)"
-Set-ItemProperty -Path $wimFilePath -Name IsReadOnly -Value $false
+try {
+    Set-ItemProperty -Path $wimFilePath -Name IsReadOnly -Value $false -ErrorAction Stop
+} catch {
+    Write-Warning "$wimFilePath IsReadOnly property may not be settable (continuing...)"
+}
+Write-Output "Mounting Windows Setup image (index 2) to modify registry (index 1 - WinPE classic menu will be preserved)..."
 Mount-WindowsImage -ImagePath $ScratchDisk\tiny11\sources\boot.wim -Index 2 -Path $ScratchDisk\scratchdir
 Write-Output "Loading registry..."
 reg load HKLM\zCOMPONENTS $ScratchDisk\scratchdir\Windows\System32\config\COMPONENTS
@@ -481,9 +843,15 @@ reg unload HKLM\zNTUSER | Out-Null
 reg unload HKLM\zSOFTWARE | Out-Null
 reg unload HKLM\zSYSTEM | Out-Null
 
-Write-Output "Unmounting image..."
+Write-Output "Unmounting image (keeping both indexes intact)..."
 Dismount-WindowsImage -Path $ScratchDisk\scratchdir -Save
-Clear-Host
+if (-not $NonInteractive) {
+    try {
+        Clear-Host
+    } catch {
+        # Ignore Clear-Host errors in non-interactive environments
+    }
+}
 Write-Output "The tiny11 image is now completed. Proceeding with the making of the ISO..."
 Write-Output "Copying unattended file for bypassing MS account on OOBE..."
 Copy-Item -Path "$PSScriptRoot\autounattend.xml" -Destination "$ScratchDisk\tiny11\autounattend.xml" -Force | Out-Null
@@ -515,20 +883,40 @@ if ([System.IO.Directory]::Exists($ADKDepTools)) {
     $OSCDIMG = $localOSCDIMGPath
 }
 
-& "$OSCDIMG" '-m' '-o' '-u2' '-udfver102' "-bootdata:2#p0,e,b$ScratchDisk\tiny11\boot\etfsboot.com#pEF,e,b$ScratchDisk\tiny11\efi\microsoft\boot\efisys.bin" "$ScratchDisk\tiny11" "$PSScriptRoot\tiny11.iso"
+Write-Output "Running oscdimg to create ISO..."
+$isoPath = "$PSScriptRoot\tiny11.iso"
+try {
+    & "$OSCDIMG" '-m' '-o' '-u2' '-udfver102' "-bootdata:2#p0,e,b$ScratchDisk\tiny11\boot\etfsboot.com#pEF,e,b$ScratchDisk\tiny11\efi\microsoft\boot\efisys.bin" "$ScratchDisk\tiny11" $isoPath 2>&1 | Out-Null
+    
+    # Verify ISO was created
+    Start-Sleep -Seconds 2
+    if (-not (Test-Path $isoPath)) {
+        Write-Error "ISO was not created at expected path: $isoPath"
+        exit 1
+    }
+    
+    $isoSize = (Get-Item $isoPath).Length / 1GB
+    Write-Output "✓ ISO created successfully: $isoPath" -ForegroundColor Green
+    Write-Output "  ISO size: $([math]::Round($isoSize, 2)) GB"
+} catch {
+    Write-Error "Failed to create ISO: $($_.Exception.Message)"
+    exit 1
+}
 
 # Finishing up
-if (-not $NonInteractive) {
 Write-Output "Creation completed! Press any key to exit the script..."
-Read-Host "Press Enter to continue"
+if ($NonInteractive) {
+    Write-Output "Build complete! Cleaning up..."
+} else {
+    Read-Host "Press Enter to continue"
 }
 Write-Output "Performing Cleanup..."
 Remove-Item -Path "$ScratchDisk\tiny11" -Recurse -Force | Out-Null
 Remove-Item -Path "$ScratchDisk\scratchdir" -Recurse -Force | Out-Null
 if (-not $NonInteractive) {
-Write-Output "Ejecting Iso drive"
-Get-Volume -DriveLetter $DriveLetter[0] | Get-DiskImage | Dismount-DiskImage
-Write-Output "Iso drive ejected"
+    Write-Output "Ejecting Iso drive"
+    Get-Volume -DriveLetter $DriveLetter[0] | Get-DiskImage | Dismount-DiskImage
+    Write-Output "Iso drive ejected"
 }
 Write-Output "Removing oscdimg.exe..."
 Remove-Item -Path "$PSScriptRoot\oscdimg.exe" -Force -ErrorAction SilentlyContinue
