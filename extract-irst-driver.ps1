@@ -28,15 +28,12 @@ Write-Host "This may take a few moments..." -ForegroundColor Gray
 Write-Host ""
 
 try {
-    # Run SetupRST.exe with extract parameter
-    $process = Start-Process -FilePath $setupRstPath -ArgumentList "-extractdrivers", $extractPath -Wait -PassThru -NoNewWindow
+    # Run SetupRST.exe with extract parameter using & operator
+    Write-Host "Running: & `"$setupRstPath`" -extractdrivers $extractPath" -ForegroundColor Gray
+    & $setupRstPath -extractdrivers $extractPath
     
-    if ($process.ExitCode -eq 0) {
-        Write-Host "Extract completed successfully!" -ForegroundColor Green
-        Write-Host ""
-        
-        # Wait a bit for files to be written
-        Start-Sleep -Seconds 3
+    Write-Host "Extract command executed!" -ForegroundColor Green
+    Write-Host ""
         
         # Check if extraction was successful
         if (Test-Path $extractPath) {
