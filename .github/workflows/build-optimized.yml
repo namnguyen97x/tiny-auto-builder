@@ -186,10 +186,10 @@ jobs:
               }
               
               # Optimized aria2c arguments for faster download
-              # Increased connections and splits for better performance
+              # Note: max-connection-per-server is limited to 16 by aria2c
               $aria2Args = @(
-                '--max-connection-per-server=32',  # Increased from 16
-                '--split=32',                       # Increased from 16
+                '--max-connection-per-server=16',  # Maximum allowed by aria2c (was incorrectly set to 32)
+                '--split=16',                       # Split into 16 parts (can be higher than connections)
                 '--min-split-size=1M',
                 '--timeout=60',
                 '--retry-wait=3',                  # Reduced from 5
@@ -204,7 +204,7 @@ jobs:
                 $isoUrl
               )
               
-              Write-Host "Using optimized aria2c downloader (32 connections, 32 splits)..."
+              Write-Host "Using optimized aria2c downloader (16 connections max, 16 splits)..."
               & aria2c @aria2Args | Out-Host
               
               if (-not (Test-Path $isoFilePath)) { throw "ISO file not found after download" }
