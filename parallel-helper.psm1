@@ -16,6 +16,11 @@ function Get-MaxParallelJobs {
     if (-not $cpuCores) {
         $cpuCores = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
     }
+    # Ensure $cpuCores is an integer
+    $cpuCores = [int]$cpuCores
+    if ($cpuCores -le 0) {
+        $cpuCores = 2  # Fallback to minimum
+    }
     # Default to 80% of CPU cores, minimum 2
     return [math]::Max(2, [math]::Floor($cpuCores * 0.8))
 }
