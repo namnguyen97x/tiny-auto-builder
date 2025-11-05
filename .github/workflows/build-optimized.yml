@@ -358,6 +358,11 @@ jobs:
           
           # Set environment variables for parallel processing
           # Max number of parallel jobs/threads (use 80% of CPU cores)
+          # Ensure $cpuCores is an integer
+          $cpuCores = [int]$cpuCores
+          if ($cpuCores -le 0) {
+            $cpuCores = 2  # Fallback to minimum
+          }
           $maxParallelJobs = [math]::Max(1, [math]::Floor($cpuCores * 0.8))
           $env:MAX_PARALLEL_JOBS = $maxParallelJobs
           Write-Host "✓ Max parallel jobs set to: $maxParallelJobs (80% of $cpuCores cores)" -ForegroundColor Green

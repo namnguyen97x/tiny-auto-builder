@@ -103,6 +103,12 @@ function Set-RegistryValuesParallel {
         $MaxParallel = Get-MaxParallelJobs
     }
     
+    # Ensure MaxParallel is an integer
+    $MaxParallel = [int]$MaxParallel
+    if ($MaxParallel -le 0) {
+        $MaxParallel = 2  # Fallback to minimum
+    }
+    
     Write-Host "Setting $($RegistryOperations.Count) registry values in parallel (max $MaxParallel concurrent operations)..." -ForegroundColor Cyan
     
     $results = $RegistryOperations | ForEach-Object -Parallel {
@@ -138,6 +144,12 @@ function Invoke-CommandsParallel {
     
     if ($MaxParallel -le 0) {
         $MaxParallel = Get-MaxParallelJobs
+    }
+    
+    # Ensure MaxParallel is an integer
+    $MaxParallel = [int]$MaxParallel
+    if ($MaxParallel -le 0) {
+        $MaxParallel = 2  # Fallback to minimum
     }
     
     Write-Host "Executing $($Commands.Count) commands in parallel (max $MaxParallel concurrent operations)..." -ForegroundColor Cyan
