@@ -188,41 +188,30 @@ if ($targetEditions.Count -gt 0) {
 # Mount image
 Write-Host "Mounting Windows image (Index: $index)..." -ForegroundColor Cyan
 
-# Clean up any existing mount points first
+# Set permissions for WIM file before mounting (same as tiny11maker.ps1)
+$wimFilePath = "$mainOSDrive\ltsc\sources\install.wim"
+$adminSID = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
+$adminGroup = $adminSID.Translate([System.Security.Principal.NTAccount])
+
+Write-Host "Setting permissions for WIM file..." -ForegroundColor Gray
+& takeown "/F" $wimFilePath 2>&1 | Out-Null
+& icacls $wimFilePath "/grant" "$($adminGroup.Value):(F)" 2>&1 | Out-Null
+
 try {
-    $existingMounts = Get-WindowsImage -Mounted -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $scratchDir }
-    if ($existingMounts) {
-        Write-Host "Found existing mount at $scratchDir, unmounting first..." -ForegroundColor Yellow
-        foreach ($mount in $existingMounts) {
-            Dismount-WindowsImage -Path $scratchDir -Discard -ErrorAction SilentlyContinue | Out-Null
-        }
-        Start-Sleep -Seconds 2
-    }
+    Set-ItemProperty -Path $wimFilePath -Name IsReadOnly -Value $false -ErrorAction Stop
+    Write-Host "WIM file permissions set successfully" -ForegroundColor Green
 } catch {
-    # Ignore errors when checking for existing mounts
+    Write-Warning "WIM file IsReadOnly property may not be settable (continuing...)"
 }
 
-# Ensure scratch directory exists and is empty
-if (Test-Path $scratchDir) {
-    Remove-Item -Path $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
-}
-New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
+# Ensure scratch directory exists
+New-Item -ItemType Directory -Force -Path $scratchDir -ErrorAction Stop | Out-Null
 
-# Mount using Mount-WindowsImage PowerShell cmdlet (more reliable than dism command)
-try {
-    Mount-WindowsImage -ImagePath "$mainOSDrive\ltsc\sources\install.wim" -Index $index -Path $scratchDir -ErrorAction Stop
-    Write-Host "Image mounted successfully" -ForegroundColor Green
-} catch {
-    Write-Error "Failed to mount Windows image: $_"
-    Write-Host "Attempting alternative mount method with DISM..." -ForegroundColor Yellow
-    $result = & 'dism' '/English' '/mount-image' "/imagefile:$mainOSDrive\ltsc\sources\install.wim" "/index:$index" "/mountdir:$scratchDir" 2>&1
-    $result | Write-Host
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Both mount methods failed. Last exit code: $LASTEXITCODE"
-        exit 1
-    }
-}
+# Mount using Mount-WindowsImage (same as tiny11maker.ps1)
+Write-Host "Mounting image (this may take a while)..." -ForegroundColor Gray
+Mount-WindowsImage -ImagePath $wimFilePath -Index $index -Path $scratchDir
+
+Write-Host "Image mounted successfully" -ForegroundColor Green
 
 # Get language code and architecture for debloat
 Write-Host "Getting image information for debloat..." -ForegroundColor Gray
@@ -328,9 +317,28 @@ function Add-DriverToImage {
 # Perform debloat (similar to tiny11maker)
 Write-Host "=== Starting Debloat Process ===" -ForegroundColor Cyan
 
-# Sử dụng debloater module nếu được enable
+# Sử dụng debloater module nếu được enable (same as tiny11maker.ps1)
 if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
-    Write-Host "Using integrated debloater module..." -ForegroundColor Cyan
+    Write-Host "Using integrated debloater from Windows-ISO-Debloater..." -ForegroundColor Cyan
+    
+    # Get packages để filter Store và AI (same as tiny11maker.ps1)
+    $allPackages = Get-ProvisionedAppxPackage -Path $scratchDir -ErrorAction SilentlyContinue
+    
+    # Filter Store packages if RemoveStore = no
+    if ($RemoveStore -eq 'no') {
+        $storePackages = $allPackages | Where-Object { $_.PackageName -like '*WindowsStore*' -or $_.PackageName -like '*StorePurchaseApp*' -or $_.PackageName -like '*Store.Engagement*' }
+        foreach ($storePkg in $storePackages) {
+            Write-Host "  Keeping Store package: $($storePkg.PackageName)" -ForegroundColor Gray
+        }
+    }
+    
+    # Filter AI packages if RemoveAI = no
+    if ($RemoveAI -eq 'no') {
+        $aiPackages = $allPackages | Where-Object { $_.PackageName -like '*Copilot*' -or $_.PackageName -like '*549981C3F5F10*' }
+        foreach ($aiPkg in $aiPackages) {
+            Write-Host "  Keeping AI package: $($aiPkg.PackageName)" -ForegroundColor Gray
+        }
+    }
     
     Remove-DebloatPackages -MountPath $scratchDir `
         -RemoveAppx:($RemoveAppx -eq 'yes') `
@@ -345,6 +353,52 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
         -RemoveEdge:($RemoveEdge -eq 'yes') `
         -RemoveOneDrive:($RemoveOneDrive -eq 'yes') `
         -Architecture $architecture
+    
+    # Remove Store packages manually if RemoveStore = yes (same as tiny11maker.ps1)
+    # Note: If RemoveAppx = yes, these may already be removed by Remove-DebloatPackages
+    if ($RemoveStore -eq 'yes') {
+        Write-Host "Removing Microsoft Store packages..." -ForegroundColor Cyan
+        # Get fresh package list after Remove-DebloatPackages may have removed some
+        $currentPackages = Get-ProvisionedAppxPackage -Path $scratchDir -ErrorAction SilentlyContinue
+        $storePackages = $currentPackages | Where-Object { $_.PackageName -like '*WindowsStore*' -or $_.PackageName -like '*StorePurchaseApp*' -or $_.PackageName -like '*Store.Engagement*' }
+        
+        if ($storePackages.Count -eq 0) {
+            Write-Host "  No Store packages found (may have been removed already by debloater)" -ForegroundColor Gray
+        } else {
+            foreach ($storePkg in $storePackages) {
+                Write-Host "  Removing: $($storePkg.PackageName)" -ForegroundColor Gray
+                try {
+                    Remove-ProvisionedAppxPackage -Path $scratchDir -PackageName $storePkg.PackageName -ErrorAction Stop | Out-Null
+                    Write-Host "    ✓ Removed successfully" -ForegroundColor Green
+                } catch {
+                    Write-Host "    ⚠ Warning: Failed to remove $($storePkg.PackageName) - $($_.Exception.Message)" -ForegroundColor Yellow
+                }
+            }
+        }
+    }
+    
+    # Remove AI packages manually if RemoveAI = yes (same as tiny11maker.ps1)
+    # Note: If RemoveAppx = yes, these may already be removed by Remove-DebloatPackages
+    if ($RemoveAI -eq 'yes') {
+        Write-Host "Removing AI/Copilot packages..." -ForegroundColor Cyan
+        # Get fresh package list after Remove-DebloatPackages may have removed some
+        $currentPackages = Get-ProvisionedAppxPackage -Path $scratchDir -ErrorAction SilentlyContinue
+        $aiPackages = $currentPackages | Where-Object { $_.PackageName -like '*Copilot*' -or $_.PackageName -like '*549981C3F5F10*' }
+        
+        if ($aiPackages.Count -eq 0) {
+            Write-Host "  No AI packages found (may have been removed already by debloater)" -ForegroundColor Gray
+        } else {
+            foreach ($aiPkg in $aiPackages) {
+                Write-Host "  Removing: $($aiPkg.PackageName)" -ForegroundColor Gray
+                try {
+                    Remove-ProvisionedAppxPackage -Path $scratchDir -PackageName $aiPkg.PackageName -ErrorAction Stop | Out-Null
+                    Write-Host "    ✓ Removed successfully" -ForegroundColor Green
+                } catch {
+                    Write-Host "    ⚠ Warning: Failed to remove $($aiPkg.PackageName) - $($_.Exception.Message)" -ForegroundColor Yellow
+                }
+            }
+        }
+    }
     
     Write-Host "Debloat packages removal completed" -ForegroundColor Green
 } else {
@@ -550,18 +604,9 @@ if ($AddStore -eq 'yes' -and $StorePackagesDir -and (Test-Path $StorePackagesDir
 Write-Host "Cleaning up image..." -ForegroundColor Cyan
 & 'dism' '/English' "/image:$scratchDir" '/Cleanup-Image' '/StartComponentCleanup' '/ResetBase' 2>&1 | Out-Null
 
-# Commit and unmount
-Write-Host "Committing changes and unmounting image..." -ForegroundColor Cyan
-try {
-    Dismount-WindowsImage -Path $scratchDir -Save -ErrorAction Stop
-    Write-Host "Image unmounted successfully" -ForegroundColor Green
-} catch {
-    Write-Warning "Failed to unmount using Mount-WindowsImage, trying DISM method..."
-    & 'dism' '/English' '/unmount-image' "/mountdir:$scratchDir" '/commit' 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Failed to commit changes (exit code: $LASTEXITCODE)"
-    }
-}
+# Commit and unmount (same as tiny11maker.ps1)
+Write-Host "Unmounting image..." -ForegroundColor Cyan
+Dismount-WindowsImage -Path $scratchDir -Save
 
 # Create ISO
 Write-Host "Creating ISO file: $IsoName" -ForegroundColor Cyan
