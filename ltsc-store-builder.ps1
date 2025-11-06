@@ -610,10 +610,33 @@ if ($AddStore -eq 'yes' -and $StorePackagesDir -and (Test-Path $StorePackagesDir
 # Cleanup image
 Write-Host "Cleaning up image..." -ForegroundColor Cyan
 & 'dism' '/English' "/image:$scratchDir" '/Cleanup-Image' '/StartComponentCleanup' '/ResetBase' 2>&1 | Out-Null
+Write-Host "Cleanup complete." -ForegroundColor Green
 
 # Commit and unmount (same as tiny11maker.ps1)
 Write-Host "Unmounting image..." -ForegroundColor Cyan
 Dismount-WindowsImage -Path $scratchDir -Save
+
+# Export image with compression to reduce size (same as tiny11maker.ps1)
+Write-Host "Exporting image with compression to reduce size..." -ForegroundColor Cyan
+$wimFilePath = "$mainOSDrive\ltsc\sources\install.wim"
+$tempWimFile = "$mainOSDrive\ltsc\sources\install2.wim"
+
+Write-Host "Exporting from index $index to compressed WIM..." -ForegroundColor Gray
+& Dism.exe /Export-Image /SourceImageFile:"$wimFilePath" /SourceIndex:$index /DestinationImageFile:"$tempWimFile" /Compress:recovery 2>&1 | Out-Null
+
+if (Test-Path $tempWimFile) {
+    Write-Host "Removing old WIM file..." -ForegroundColor Gray
+    Remove-Item -Path $wimFilePath -Force -ErrorAction SilentlyContinue
+    Write-Host "Renaming compressed WIM file..." -ForegroundColor Gray
+    Rename-Item -Path $tempWimFile -NewName "install.wim" -Force | Out-Null
+    Write-Host "✓ Image exported and compressed successfully" -ForegroundColor Green
+    
+    # Show size comparison
+    $newSize = (Get-Item $wimFilePath).Length / 1GB
+    Write-Host "  Compressed WIM size: $([math]::Round($newSize, 2)) GB" -ForegroundColor Gray
+} else {
+    Write-Warning "Failed to export compressed image, using original WIM file"
+}
 
 # Create ISO (same as tiny11maker.ps1)
 Write-Host "The LTSC image is now completed. Proceeding with the making of the ISO..." -ForegroundColor Cyan
