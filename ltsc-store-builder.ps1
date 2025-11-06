@@ -85,10 +85,30 @@ if ($AddStore -eq 'yes' -and (-not $StorePackagesDir -or -not (Test-Path $StoreP
 $mainOSDrive = $env:SystemDrive
 $scratchDir = "$mainOSDrive\scratchdir"
 
-# Create working directories
+# Check for admin privileges (required for DISM operations)
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Warning "Script is not running with administrator privileges. Some operations may fail."
+    Write-Warning "In GitHub Actions, runner should have admin privileges by default."
+}
+
+# Create working directories with proper permissions
 Write-Host "Creating working directories..."
-New-Item -ItemType Directory -Force -Path "$mainOSDrive\ltsc" | Out-Null
-New-Item -ItemType Directory -Force -Path "$mainOSDrive\ltsc\sources" | Out-Null
+try {
+    New-Item -ItemType Directory -Force -Path "$mainOSDrive\ltsc" -ErrorAction Stop | Out-Null
+    New-Item -ItemType Directory -Force -Path "$mainOSDrive\ltsc\sources" -ErrorAction Stop | Out-Null
+    
+    # Ensure scratch directory has write permissions
+    if (Test-Path $scratchDir) {
+        Remove-Item -Path $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Force -Path $scratchDir -ErrorAction Stop | Out-Null
+    
+    Write-Host "Directories created successfully" -ForegroundColor Green
+} catch {
+    Write-Error "Failed to create working directories: $_"
+    exit 1
+}
 
 Write-Host "Copying Windows image..."
 Copy-Item -Path "$DriveLetter\*" -Destination "$mainOSDrive\ltsc" -Recurse -Force | Out-Null
@@ -167,12 +187,41 @@ if ($targetEditions.Count -gt 0) {
 
 # Mount image
 Write-Host "Mounting Windows image (Index: $index)..." -ForegroundColor Cyan
-New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
-& 'dism' '/English' '/mount-image' "/imagefile:$mainOSDrive\ltsc\sources\install.wim" "/index:$index" "/mountdir:$scratchDir"
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to mount Windows image"
-    exit 1
+# Clean up any existing mount points first
+try {
+    $existingMounts = Get-WindowsImage -Mounted -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $scratchDir }
+    if ($existingMounts) {
+        Write-Host "Found existing mount at $scratchDir, unmounting first..." -ForegroundColor Yellow
+        foreach ($mount in $existingMounts) {
+            Dismount-WindowsImage -Path $scratchDir -Discard -ErrorAction SilentlyContinue | Out-Null
+        }
+        Start-Sleep -Seconds 2
+    }
+} catch {
+    # Ignore errors when checking for existing mounts
+}
+
+# Ensure scratch directory exists and is empty
+if (Test-Path $scratchDir) {
+    Remove-Item -Path $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
+
+# Mount using Mount-WindowsImage PowerShell cmdlet (more reliable than dism command)
+try {
+    Mount-WindowsImage -ImagePath "$mainOSDrive\ltsc\sources\install.wim" -Index $index -Path $scratchDir -ErrorAction Stop
+    Write-Host "Image mounted successfully" -ForegroundColor Green
+} catch {
+    Write-Error "Failed to mount Windows image: $_"
+    Write-Host "Attempting alternative mount method with DISM..." -ForegroundColor Yellow
+    $result = & 'dism' '/English' '/mount-image' "/imagefile:$mainOSDrive\ltsc\sources\install.wim" "/index:$index" "/mountdir:$scratchDir" 2>&1
+    $result | Write-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Both mount methods failed. Last exit code: $LASTEXITCODE"
+        exit 1
+    }
 }
 
 # Get language code and architecture for debloat
@@ -503,10 +552,15 @@ Write-Host "Cleaning up image..." -ForegroundColor Cyan
 
 # Commit and unmount
 Write-Host "Committing changes and unmounting image..." -ForegroundColor Cyan
-& 'dism' '/English' '/unmount-image' "/mountdir:$scratchDir" '/commit'
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "Failed to commit changes (exit code: $LASTEXITCODE)"
+try {
+    Dismount-WindowsImage -Path $scratchDir -Save -ErrorAction Stop
+    Write-Host "Image unmounted successfully" -ForegroundColor Green
+} catch {
+    Write-Warning "Failed to unmount using Mount-WindowsImage, trying DISM method..."
+    & 'dism' '/English' '/unmount-image' "/mountdir:$scratchDir" '/commit' 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to commit changes (exit code: $LASTEXITCODE)"
+    }
 }
 
 # Create ISO
