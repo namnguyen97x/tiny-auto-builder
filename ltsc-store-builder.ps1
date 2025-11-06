@@ -321,8 +321,19 @@ function Add-DriverToImage {
     }
 }
 
+# Store original WIM size for comparison
+$originalWimPath = "$mainOSDrive\ltsc\sources\install.wim"
+if (Test-Path $originalWimPath) {
+    $originalSize = (Get-Item $originalWimPath).Length / 1GB
+    Write-Host "=== Original WIM Size: $([math]::Round($originalSize, 2)) GB ===" -ForegroundColor Yellow
+}
+
 # Perform debloat (similar to tiny11maker)
 Write-Host "=== Starting Debloat Process ===" -ForegroundColor Cyan
+
+# Count packages before debloat
+$packagesBefore = (Get-ProvisionedAppxPackage -Path $scratchDir -ErrorAction SilentlyContinue).Count
+Write-Host "AppX packages before debloat: $packagesBefore" -ForegroundColor Gray
 
 # Sử dụng debloater module nếu được enable (same as tiny11maker.ps1)
 if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
@@ -407,6 +418,11 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
         }
     }
     
+    # Count packages after debloat
+    $packagesAfter = (Get-ProvisionedAppxPackage -Path $scratchDir -ErrorAction SilentlyContinue).Count
+    $packagesRemoved = $packagesBefore - $packagesAfter
+    Write-Host "AppX packages after debloat: $packagesAfter" -ForegroundColor Gray
+    Write-Host "AppX packages removed: $packagesRemoved" -ForegroundColor Green
     Write-Host "Debloat packages removal completed" -ForegroundColor Green
 } else {
     Write-Warning "Debloater module not available, skipping advanced debloat..."
@@ -514,6 +530,7 @@ if ($IrstDriverPath -or (Test-Path (Join-Path $scriptRoot "IRST_Driver"))) {
 # Add Store packages if AddStore = yes
 if ($AddStore -eq 'yes' -and $StorePackagesDir -and (Test-Path $StorePackagesDir)) {
     Write-Host "=== Adding Microsoft Store Packages ===" -ForegroundColor Cyan
+    Write-Host "Note: Adding Store packages will increase image size (~200-300MB)" -ForegroundColor Yellow
     $storePackages = Get-ChildItem -Path $StorePackagesDir -Filter "*.Appx*" -Recurse
 
     if ($storePackages.Count -eq 0) {
@@ -590,8 +607,11 @@ if ($AddStore -eq 'yes' -and $StorePackagesDir -and (Test-Path $StorePackagesDir
         }
     }
     
+        # Count packages after Store installation
+        $packagesAfterStore = (Get-ProvisionedAppxPackage -Path $scratchDir -ErrorAction SilentlyContinue).Count
         Write-Host "=== Store Installation Summary ===" -ForegroundColor Cyan
         Write-Host "Successfully installed: $($installedPackages.Count) package(s)" -ForegroundColor Green
+        Write-Host "Total AppX packages after Store install: $packagesAfterStore" -ForegroundColor Gray
         if ($failedPackages.Count -gt 0) {
             Write-Host "Failed: $($failedPackages.Count) package(s)" -ForegroundColor Yellow
             foreach ($failed in $failedPackages) {
@@ -626,6 +646,7 @@ Write-Host "Exporting from index $index to compressed WIM..." -ForegroundColor G
 
 if (Test-Path $tempWimFile) {
     Write-Host "Removing old WIM file..." -ForegroundColor Gray
+    $oldSize = if (Test-Path $wimFilePath) { (Get-Item $wimFilePath).Length / 1GB } else { 0 }
     Remove-Item -Path $wimFilePath -Force -ErrorAction SilentlyContinue
     Write-Host "Renaming compressed WIM file..." -ForegroundColor Gray
     Rename-Item -Path $tempWimFile -NewName "install.wim" -Force | Out-Null
@@ -633,7 +654,11 @@ if (Test-Path $tempWimFile) {
     
     # Show size comparison
     $newSize = (Get-Item $wimFilePath).Length / 1GB
-    Write-Host "  Compressed WIM size: $([math]::Round($newSize, 2)) GB" -ForegroundColor Gray
+    $sizeReduction = $oldSize - $newSize
+    $sizeReductionPercent = if ($oldSize -gt 0) { [math]::Round(($sizeReduction / $oldSize) * 100, 2) } else { 0 }
+    Write-Host "  Original WIM size: $([math]::Round($oldSize, 2)) GB" -ForegroundColor Gray
+    Write-Host "  Compressed WIM size: $([math]::Round($newSize, 2)) GB" -ForegroundColor Green
+    Write-Host "  Size reduction: $([math]::Round($sizeReduction, 2)) GB ($sizeReductionPercent%)" -ForegroundColor $(if ($sizeReduction -gt 0) { "Green" } else { "Yellow" })
 } else {
     Write-Warning "Failed to export compressed image, using original WIM file"
 }
