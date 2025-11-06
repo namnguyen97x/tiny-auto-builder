@@ -1,0 +1,471 @@
+name: Build LTSC ISO with Store
+
+# Build Windows LTSC ISO with Microsoft Store support
+# Supports Enterprise LTSC, IoT Enterprise LTSC, IoT Enterprise Subscription LTSC editions
+
+on:
+  workflow_call:
+    inputs:
+      iso_url:
+        description: 'Windows LTSC ISO URL'
+        required: false
+        type: string
+      edition:
+        description: 'LTSC Edition to build'
+        required: false
+        default: 'IoT Enterprise LTSC'
+        type: string
+      add_store:
+        description: 'Add Microsoft Store to ISO (default: yes)'
+        required: false
+        default: 'yes'
+        type: string
+      remove_defender:
+        description: 'Remove Windows Defender (default: no)'
+        required: false
+        default: 'no'
+        type: string
+      remove_edge:
+        description: 'Remove Microsoft Edge (default: yes)'
+        required: false
+        default: 'yes'
+        type: string
+      remove_ai:
+        description: 'Remove AI/Copilot (default: no, LTSC thường không có AI chính thức)'
+        required: false
+        default: 'no'
+        type: string
+      iso_name:
+        description: 'Custom ISO filename (leave empty to use default: ltsc-store.iso)'
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      iso_url:
+        description: 'Windows LTSC ISO URL'
+        required: false
+        type: string
+      edition:
+        description: 'LTSC Edition to build'
+        required: false
+        default: 'IoT Enterprise LTSC'
+        type: choice
+        options:
+          - Enterprise LTSC
+          - IoT Enterprise LTSC
+          - IoT Enterprise Subscription LTSC
+      add_store:
+        description: 'Add Microsoft Store to ISO'
+        required: false
+        default: true
+        type: boolean
+      remove_defender:
+        description: 'Remove Windows Defender'
+        required: false
+        default: false
+        type: boolean
+      remove_edge:
+        description: 'Remove Microsoft Edge'
+        required: false
+        default: true
+        type: boolean
+      remove_ai:
+        description: 'Remove AI/Copilot (LTSC thường không có AI chính thức)'
+        required: false
+        default: false
+        type: boolean
+      iso_name:
+        description: 'Custom ISO filename (leave empty to use default: ltsc-store.iso)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 180
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup PowerShell and Environment
+        shell: pwsh
+        run: |
+          $PSVersionTable
+          Write-Host "PowerShell version: $($PSVersionTable.PSVersion)"
+          Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+          $PSDefaultParameterValues['*:ErrorAction'] = 'SilentlyContinue'
+          
+          Write-Host "=== System Information ===" -ForegroundColor Cyan
+          Write-Host "CPU Cores: $env:NUMBER_OF_PROCESSORS"
+          Write-Host "OS Version: $([System.Environment]::OSVersion.VersionString)"
+          
+          $drive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -gt 0 } | Select-Object -First 1
+          if ($drive) {
+            $freeSpaceGB = [math]::Round($drive.Free / 1GB, 2)
+            Write-Host "Available disk space: $freeSpaceGB GB"
+          }
+          
+          $env:DISM_MAX_THREADS = $env:NUMBER_OF_PROCESSORS
+          Write-Host "DISM optimization: Max threads = $env:DISM_MAX_THREADS"
+      
+      - name: Download Microsoft Store Packages
+        shell: pwsh
+        id: download-store
+        env:
+          ADD_STORE: ${{ github.event.inputs.add_store || inputs.add_store || 'yes' }}
+        run: |
+          # Helper function to convert boolean/string to yes/no
+          function Convert-ToYesNo {
+            param($value, $default = 'yes')
+            if (-not $value) { return $default }
+            $str = $value.ToString().ToLower()
+            if ($str -eq 'true' -or $str -eq '1' -or $str -eq 'yes') { return 'yes' }
+            return 'no'
+          }
+          
+          $addStore = Convert-ToYesNo $env:ADD_STORE 'yes'
+          
+          if ($addStore -ne 'yes') {
+            Write-Host "AddStore=$addStore, skipping Store packages download" -ForegroundColor Yellow
+            $storeDir = "$PSScriptRoot\StorePackages"
+            New-Item -ItemType Directory -Force -Path $storeDir | Out-Null
+            echo "STORE_PACKAGES_DIR=$storeDir" >> $env:GITHUB_ENV
+            exit 0
+          }
+          
+          $ErrorActionPreference = 'Stop'
+          $storeDir = "$PSScriptRoot\StorePackages"
+          
+          Write-Host "=== Downloading Microsoft Store Packages ===" -ForegroundColor Cyan
+          Write-Host "From: https://github.com/R-YaTian/LTSC-Add-MicrosoftStore-2021_2024"
+          
+          # Create Store packages directory
+          New-Item -ItemType Directory -Force -Path $storeDir | Out-Null
+          
+          # Store package files to download
+          $storeFiles = @(
+            'Microsoft.DesktopAppInstaller_2023.808.2243.0_neutral___8wekyb3d8bbwe.Msixbundle',
+            'Microsoft.NET.Native.Framework.2.2_2.2.29512.0_x64__8wekyb3d8bbwe.Appx',
+            'Microsoft.NET.Native.Framework.2.2_2.2.29512.0_x86__8wekyb3d8bbwe.Appx',
+            'Microsoft.NET.Native.Runtime.2.2_2.2.28604.0_x64__8wekyb3d8bbwe.Appx',
+            'Microsoft.NET.Native.Runtime.2.2_2.2.28604.0_x86__8wekyb3d8bbwe.Appx',
+            'Microsoft.UI.Xaml.2.8_8.2310.30001.0_x64__8wekyb3d8bbwe.Appx',
+            'Microsoft.UI.Xaml.2.8_8.2310.30001.0_x86__8wekyb3d8bbwe.Appx',
+            'Microsoft.VCLibs.140.00.UWPDesktop_14.0.33728.0_x64__8wekyb3d8bbwe.Appx',
+            'Microsoft.VCLibs.140.00.UWPDesktop_14.0.33728.0_x86__8wekyb3d8bbwe.Appx',
+            'Microsoft.VCLibs.140.00_14.0.33519.0_x64__8wekyb3d8bbwe.Appx',
+            'Microsoft.VCLibs.140.00_14.0.33519.0_x86__8wekyb3d8bbwe.Appx',
+            'Microsoft.WindowsStore_22409.1401.5.0_neutral___8wekyb3d8bbwe.Msixbundle',
+            'Microsoft.XboxIdentityProvider_12.115.1001.0_neutral___8wekyb3d8bbwe.AppxBundle'
+          )
+          
+          $baseUrl = 'https://github.com/R-YaTian/LTSC-Add-MicrosoftStore-2021_2024/raw/main/'
+          
+          # Check if aria2c is available
+          $aria2 = Get-Command aria2c -ErrorAction SilentlyContinue
+          if (-not $aria2) {
+            $chocoAria2 = "C:\ProgramData\choco\bin\aria2c.exe"
+            if (Test-Path $chocoAria2) {
+              $env:Path = "C:\ProgramData\choco\bin;$env:Path"
+              $aria2 = Get-Command aria2c -ErrorAction SilentlyContinue
+            }
+            
+            if (-not $aria2) {
+              Write-Host "Installing aria2c via Chocolatey..."
+              choco install aria2 -y --no-progress | Out-Host
+            }
+          }
+          
+          foreach ($file in $storeFiles) {
+            $filePath = Join-Path $storeDir $file
+            $fileUrl = $baseUrl + $file
+            
+            if (Test-Path $filePath) {
+              Write-Host "✓ $file already exists, skipping..." -ForegroundColor Green
+              continue
+            }
+            
+            Write-Host "Downloading: $file"
+            try {
+              if ($aria2) {
+                & aria2c --max-connection-per-server=8 --split=8 --dir=$storeDir --out=$file $fileUrl | Out-Host
+              } else {
+                Invoke-WebRequest -Uri $fileUrl -OutFile $filePath -UseBasicParsing
+              }
+              
+              if (Test-Path $filePath) {
+                $sizeMB = (Get-Item $filePath).Length / 1MB
+                Write-Host "  ✓ Downloaded: $([math]::Round($sizeMB, 2)) MB" -ForegroundColor Green
+              } else {
+                Write-Warning "  ✗ Failed to download: $file"
+              }
+            } catch {
+              Write-Warning "  ✗ Error downloading $file : $_"
+            }
+          }
+          
+          Write-Host "Store packages download completed!" -ForegroundColor Green
+          echo "STORE_PACKAGES_DIR=$storeDir" >> $env:GITHUB_ENV
+      
+      - name: Cache Dependencies (ISO)
+        uses: actions/cache@v4
+        id: cache-iso
+        with:
+          path: |
+            ${{ env.RUNNER_TEMP }}/windows-ltsc.iso
+          key: ltsc-iso-cache-${{ runner.os }}-${{ hashFiles('**/*.yml') }}
+          restore-keys: |
+            ltsc-iso-cache-${{ runner.os }}-
+        continue-on-error: true
+      
+      - name: Download and Mount Windows LTSC ISO
+        shell: pwsh
+        id: download-iso
+        env:
+          ISO_URL_INPUT: ${{ github.event.inputs.iso_url }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          
+          $isoUrl = $env:ISO_URL_INPUT
+          if (-not $isoUrl -or $isoUrl.Trim() -eq '') {
+            Write-Error "ISO URL is required for LTSC build. Please provide iso_url parameter."
+            exit 1
+          }
+          
+          $isoFilePath = "$env:RUNNER_TEMP\windows-ltsc.iso"
+          
+          # Check if ISO already exists from cache
+          if (Test-Path $isoFilePath) {
+            $cachedSize = (Get-Item $isoFilePath).Length / 1GB
+            Write-Host "✓ Using cached ISO file: $([math]::Round($cachedSize, 2)) GB" -ForegroundColor Green
+          } else {
+            Write-Host "Downloading Windows LTSC ISO from: $isoUrl"
+            
+            $aria2 = Get-Command aria2c -ErrorAction SilentlyContinue
+            if (-not $aria2) {
+              $chocoAria2 = "C:\ProgramData\choco\bin\aria2c.exe"
+              if (Test-Path $chocoAria2) {
+                $env:Path = "C:\ProgramData\choco\bin;$env:Path"
+                $aria2 = Get-Command aria2c -ErrorAction SilentlyContinue
+              }
+              
+              if (-not $aria2) {
+                choco install aria2 -y --no-progress | Out-Host
+              }
+            }
+            
+            $aria2Args = @(
+              '--max-connection-per-server=16',
+              '--split=16',
+              '--min-split-size=1M',
+              '--timeout=60',
+              '--retry-wait=3',
+              '--max-tries=5',
+              '--console-log-level=warn',
+              '--summary-interval=5',
+              '--file-allocation=none',
+              "--dir=$($env:RUNNER_TEMP)",
+              '--check-certificate=true',
+              '--auto-file-renaming=false',
+              "--out=$(Split-Path -Leaf $isoFilePath)",
+              $isoUrl
+            )
+            
+            Write-Host "Downloading with aria2c..."
+            & aria2c @aria2Args | Out-Host
+            
+            if (-not (Test-Path $isoFilePath)) {
+              throw "ISO file not found after download"
+            }
+            
+            $fileSize = (Get-Item $isoFilePath).Length / 1GB
+            Write-Host "✓ ISO downloaded: $([math]::Round($fileSize, 2)) GB" -ForegroundColor Green
+          }
+          
+          Write-Host "Mounting ISO file: $isoFilePath"
+          $mountResult = Mount-DiskImage -ImagePath $isoFilePath -PassThru -ErrorAction Stop
+          $volume = $mountResult | Get-Volume
+          $isoDriveLetter = $volume.DriveLetter
+          
+          if ($isoDriveLetter) {
+            $isoDrive = "$isoDriveLetter`:"
+            Write-Host "✓ ISO mounted to: $isoDrive" -ForegroundColor Green
+            echo "ISO_DRIVE=$isoDrive" >> $env:GITHUB_ENV
+            echo "ISO_FILE_PATH=$isoFilePath" >> $env:GITHUB_ENV
+          } else {
+            Write-Error "Failed to get drive letter from mounted ISO"
+            exit 1
+          }
+      
+      - name: Build LTSC ISO with Store
+        shell: pwsh
+        id: build
+        env:
+          EDITION: ${{ github.event.inputs.edition || inputs.edition || 'IoT Enterprise LTSC' }}
+          ISO_NAME: ${{ github.event.inputs.iso_name || inputs.iso_name || 'ltsc-store.iso' }}
+          ADD_STORE: ${{ github.event.inputs.add_store || inputs.add_store || 'yes' }}
+          REMOVE_DEFENDER: ${{ github.event.inputs.remove_defender || inputs.remove_defender || 'no' }}
+          REMOVE_EDGE: ${{ github.event.inputs.remove_edge || inputs.remove_edge || 'yes' }}
+          REMOVE_AI: ${{ github.event.inputs.remove_ai || inputs.remove_ai || 'no' }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $buildStartTime = Get-Date
+          
+          function Get-PerformanceMetrics {
+            $memInfo = Get-CimInstance Win32_OperatingSystem
+            $cpu = Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction SilentlyContinue
+            $freeMemGB = [math]::Round($memInfo.FreePhysicalMemory / 1MB, 2)
+            $cpuPercent = if ($cpu) { [math]::Round($cpu.CounterSamples[0].CookedValue, 1) } else { "N/A" }
+            return @{
+              FreeMemoryGB = $freeMemGB
+              CPUPercent = $cpuPercent
+            }
+          }
+          
+          $isoDrive = $env:ISO_DRIVE
+          if (-not $isoDrive) {
+            Write-Error "ISO drive not set"
+            exit 1
+          }
+          
+          $edition = $env:EDITION
+          $isoName = if ($env:ISO_NAME) { $env:ISO_NAME } else { 'ltsc-store.iso' }
+          
+          # Helper function to convert boolean/string to yes/no
+          function Convert-ToYesNo {
+            param($value, $default = 'yes')
+            if (-not $value) { return $default }
+            $str = $value.ToString().ToLower()
+            if ($str -eq 'true' -or $str -eq '1' -or $str -eq 'yes') { return 'yes' }
+            return 'no'
+          }
+          
+          # Convert environment variables to yes/no FIRST (before using them)
+          $addStore = Convert-ToYesNo $env:ADD_STORE 'yes'
+          $removeDefender = Convert-ToYesNo $env:REMOVE_DEFENDER 'no'
+          $removeEdge = Convert-ToYesNo $env:REMOVE_EDGE 'yes'
+          $removeAI = Convert-ToYesNo $env:REMOVE_AI 'no'
+          
+          # Validate Store packages directory AFTER converting AddStore
+          $storeDir = $env:STORE_PACKAGES_DIR
+          if (-not $storeDir -or -not (Test-Path $storeDir)) {
+            # Store packages directory might not exist if AddStore=no, that's OK
+            if ($addStore -eq 'yes') {
+              Write-Error "Store packages directory not found (AddStore=yes but packages not downloaded)"
+              exit 1
+            } else {
+              Write-Host "AddStore=no, Store packages directory not needed" -ForegroundColor Gray
+              $storeDir = ''  # Empty string means no Store packages
+            }
+          }
+          
+          Write-Host "=== Build Configuration ===" -ForegroundColor Cyan
+          Write-Host "ISO Drive: $isoDrive"
+          Write-Host "Store Packages: $storeDir"
+          Write-Host "Target Edition: $edition"
+          Write-Host "ISO Name: $isoName"
+          Write-Host "Debloat options: Defender=$removeDefender, AI=$removeAI, Edge=$removeEdge, AddStore=$addStore" -ForegroundColor Cyan
+          
+          # Run the builder script
+          $scriptPath = Join-Path $PSScriptRoot "ltsc-store-builder.ps1"
+          
+          if (-not (Test-Path $scriptPath)) {
+            Write-Error "LTSC builder script not found at: $scriptPath"
+            exit 1
+          }
+          
+          Write-Host "=== Starting Build Process ===" -ForegroundColor Cyan
+          $metricsBefore = Get-PerformanceMetrics
+          Write-Host "System metrics before build: CPU=$($metricsBefore.CPUPercent)%, Free RAM=$($metricsBefore.FreeMemoryGB) GB"
+          
+          try {
+            # Run script and capture output
+            $scriptOutput = & pwsh -File $scriptPath -DriveLetter $isoDrive -StorePackagesDir $storeDir -Edition $edition -IsoName $isoName -AddStore $addStore -RemoveDefender $removeDefender -RemoveEdge $removeEdge -RemoveAI $removeAI -IrstDriverPath '' 2>&1
+            
+            # Process output and extract ISO path
+            foreach ($line in $scriptOutput) {
+              Write-Host $line
+              
+              # Extract ISO_PATH from script output
+              if ($line -match '^ISO_PATH=(.+)$') {
+                $env:ISO_PATH = $Matches[1]
+              }
+              if ($line -match '^ISO_NAME=(.+)$') {
+                $env:ISO_NAME = $Matches[1]
+              }
+              
+              $now = Get-Date
+              if (-not $script:lastMetricsTime -or ($now - $script:lastMetricsTime).TotalMinutes -ge 2) {
+                $metrics = Get-PerformanceMetrics
+                $elapsed = $now - $buildStartTime
+                Write-Host "[Performance] [$([math]::Round($elapsed.TotalMinutes, 1)) min] CPU=$($metrics.CPUPercent)%, Free RAM=$($metrics.FreeMemoryGB) GB" -ForegroundColor Gray
+                $script:lastMetricsTime = $now
+              }
+            }
+            
+            if ($LASTEXITCODE -ne 0) {
+              Write-Warning "Script exited with code $LASTEXITCODE"
+            }
+          } catch {
+            Write-Error "Error running script: $_"
+            exit 1
+          }
+          
+          # Use ISO path from script output or construct from IsoName
+          if (-not $env:ISO_PATH) {
+            $env:ISO_PATH = Join-Path $PSScriptRoot $isoName
+          }
+          
+          if (-not (Test-Path $env:ISO_PATH)) {
+            Write-Error "ISO was not created at expected path: $env:ISO_PATH"
+            exit 1
+          }
+          
+          Write-Host "✓ ISO confirmed at: $env:ISO_PATH" -ForegroundColor Green
+          echo "ISO_PATH=$env:ISO_PATH" >> $env:GITHUB_ENV
+          
+          $buildTime = (Get-Date) - $buildStartTime
+          $metricsAfter = Get-PerformanceMetrics
+          
+          Write-Host "=== Build Summary ===" -ForegroundColor Cyan
+          Write-Host "Build time: $([math]::Round($buildTime.TotalMinutes, 2)) minutes"
+          Write-Host "System metrics after build: CPU=$($metricsAfter.CPUPercent)%, Free RAM=$($metricsAfter.FreeMemoryGB) GB"
+      
+      - name: Upload ISO Artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ltsc-store-iso
+          path: ${{ env.ISO_PATH }}
+          retention-days: 30
+      
+      - name: Post-job Cleanup
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "Post job cleanup..."
+          
+          # Restore Windows Search service if stopped
+          try {
+            Start-Service -Name "WSearch" -ErrorAction SilentlyContinue | Out-Null
+            Write-Host "✓ Windows Search service restored" -ForegroundColor Green
+          } catch {
+            Write-Host "  Info: Windows Search service restore skipped" -ForegroundColor Yellow
+          }
+          
+          # Unmount ISO
+          if ($env:ISO_FILE_PATH) {
+            Write-Host "Unmounting ISO: $env:ISO_FILE_PATH"
+            try {
+              Get-DiskImage | Where-Object { $_.ImagePath -eq $env:ISO_FILE_PATH } | Dismount-DiskImage -ErrorAction Stop
+              Write-Host "✓ ISO unmounted successfully" -ForegroundColor Green
+            } catch {
+              Write-Warning "Failed to unmount ISO: $_"
+            }
+          }
+
