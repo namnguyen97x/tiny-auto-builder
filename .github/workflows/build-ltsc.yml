@@ -171,8 +171,8 @@ jobs:
             'Microsoft.VCLibs.140.00.UWPDesktop_14.0.33728.0_x86__8wekyb3d8bbwe.Appx',
             'Microsoft.VCLibs.140.00_14.0.33519.0_x64__8wekyb3d8bbwe.Appx',
             'Microsoft.VCLibs.140.00_14.0.33519.0_x86__8wekyb3d8bbwe.Appx',
-            'Microsoft.WindowsStore_22409.1401.5.0_neutral___8wekyb3d8bbwe.Msixbundle',
-            'Microsoft.DesktopAppInstaller_2023.808.2243.0_neutral___8wekyb3d8bbwe.Msixbundle'
+            'Microsoft.WindowsStore_*_neutral___8wekyb3d8bbwe.Msixbundle',
+            'Microsoft.DesktopAppInstaller_*_neutral___8wekyb3d8bbwe.Msixbundle'
           )
           
           # Optional packages (will not fail if not found)
@@ -184,6 +184,36 @@ jobs:
           $storeFiles = $storeFilesRequired + $storeFilesOptional
           
           $baseUrl = 'https://github.com/namnguyen97x/LTSC-Add-Microsoft-Store/raw/master/'
+
+          # Resolve actual filenames for versioned bundles via GitHub API (avoid hardcoding versions)
+          $repoApi = 'https://api.github.com/repos/namnguyen97x/LTSC-Add-Microsoft-Store/contents'
+          $repoFiles = @()
+          try {
+            $repoResponse = Invoke-WebRequest -Uri $repoApi -UseBasicParsing -Headers @{ 'User-Agent' = 'tiny-auto-builder' }
+            if ($repoResponse.StatusCode -eq 200) {
+              $repoFiles = ($repoResponse.Content | ConvertFrom-Json) | Where-Object { $_.type -eq 'file' } | Select-Object -ExpandProperty name
+            }
+          } catch {
+            Write-Host 'Warning: Failed to query GitHub API for file list. Falling back to static names.' -ForegroundColor Yellow
+          }
+
+          function Resolve-RepoFileName {
+            param(
+              [string]$pattern
+            )
+            if (-not $repoFiles -or $repoFiles.Count -eq 0) { return $pattern }
+            # Translate PowerShell wildcard to regex
+            $regex = '^' + [Regex]::Escape($pattern).Replace('\*', '.*').Replace('\?', '.') + '$'
+            $match = $repoFiles | Where-Object { $_ -match $regex } | Sort-Object -Descending | Select-Object -First 1
+            if ($match) { return $match } else { return $pattern }
+          }
+
+          # Resolve dynamic bundle names for Store and App Installer
+          $storeFilesRequired = $storeFilesRequired | ForEach-Object {
+            if ($_ -like 'Microsoft.WindowsStore_*_neutral___8wekyb3d8bbwe.Msixbundle') { return (Resolve-RepoFileName $_) }
+            if ($_ -like 'Microsoft.DesktopAppInstaller_*_neutral___8wekyb3d8bbwe.Msixbundle') { return (Resolve-RepoFileName $_) }
+            return $_
+          }
           
           # Check if aria2c is available
           $aria2 = Get-Command aria2c -ErrorAction SilentlyContinue
