@@ -478,6 +478,27 @@ Write-Host "Bypassing system requirements..." -ForegroundColor Cyan
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' '/v' 'OOBELocalAccount' '/t' 'REG_SZ' '/d' 'start ms-cxh:localonly' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' '/v' 'BypassNRO' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 
+# Copy autounattend.xml to Sysprep directory (same as tiny11maker.ps1)
+$autounattendPath = Join-Path $scriptRoot "autounattend.xml"
+if (-not (Test-Path $autounattendPath)) {
+    Write-Host "Downloading autounattend.xml..." -ForegroundColor Cyan
+    try {
+        Invoke-RestMethod "https://raw.githubusercontent.com/ntdevlabs/tiny11builder/refs/heads/main/autounattend.xml" -OutFile $autounattendPath -ErrorAction Stop
+        Write-Host "autounattend.xml downloaded successfully" -ForegroundColor Green
+    } catch {
+        Write-Warning "Failed to download autounattend.xml: $_"
+    }
+}
+
+if (Test-Path $autounattendPath) {
+    $sysprepDir = "$scratchDir\Windows\System32\Sysprep"
+    if (-not (Test-Path $sysprepDir)) {
+        New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null
+    }
+    Copy-Item -Path $autounattendPath -Destination "$sysprepDir\autounattend.xml" -Force | Out-Null
+    Write-Host "autounattend.xml copied to Sysprep directory" -ForegroundColor Green
+}
+
 # Disable Reserved Storage
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager' '/v' 'ShippedWithReserves' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 
@@ -663,16 +684,81 @@ if (Test-Path $tempWimFile) {
     Write-Warning "Failed to export compressed image, using original WIM file"
 }
 
+Write-Host "Windows image completed. Continuing with boot.wim..." -ForegroundColor Cyan
+
+# Mount boot.wim to modify Windows Setup (same as tiny11maker.ps1)
+Write-Host "Mounting boot image (keeping both WinPE classic menu and Windows Setup)..." -ForegroundColor Cyan
+$bootWimPath = "$mainOSDrive\ltsc\sources\boot.wim"
+
+# Set permissions for boot.wim file
+Write-Host "Setting permissions for boot.wim file..." -ForegroundColor Gray
+& takeown "/F" $bootWimPath 2>&1 | Out-Null
+& icacls $bootWimPath "/grant" "$($adminGroup.Value):(F)" 2>&1 | Out-Null
+
+try {
+    Set-ItemProperty -Path $bootWimPath -Name IsReadOnly -Value $false -ErrorAction Stop
+    Write-Host "boot.wim file permissions set successfully" -ForegroundColor Green
+} catch {
+    Write-Warning "boot.wim file IsReadOnly property may not be settable (continuing...)"
+}
+
+# Mount Windows Setup image (index 2) to modify registry (index 1 - WinPE classic menu will be preserved)
+Write-Host "Mounting Windows Setup image (index 2) to modify registry..." -ForegroundColor Gray
+Mount-WindowsImage -ImagePath $bootWimPath -Index 2 -Path $scratchDir
+
+Write-Host "Loading registry for boot.wim..." -ForegroundColor Gray
+reg load HKLM\zCOMPONENTS $scratchDir\Windows\System32\config\COMPONENTS | Out-Null
+reg load HKLM\zDEFAULT $scratchDir\Windows\System32\config\default | Out-Null
+reg load HKLM\zNTUSER $scratchDir\Users\Default\ntuser.dat | Out-Null
+reg load HKLM\zSOFTWARE $scratchDir\Windows\System32\config\SOFTWARE | Out-Null
+reg load HKLM\zSYSTEM $scratchDir\Windows\System32\config\SYSTEM | Out-Null
+
+# Bypass system requirements on the setup image (same as tiny11maker.ps1)
+Write-Host "Bypassing system requirements on the setup image..." -ForegroundColor Cyan
+& 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassCPUCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassRAMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassSecureBootCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassStorageCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassTPMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\MoSetup' '/v' 'AllowUpgradesWithUnsupportedTPMOrCPU' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+Write-Host "✓ System requirements bypass applied to Windows Setup" -ForegroundColor Green
+
+# Unload registry
+Write-Host "Unmounting registry..." -ForegroundColor Gray
+reg unload HKLM\zCOMPONENTS | Out-Null
+reg unload HKLM\zDEFAULT | Out-Null
+reg unload HKLM\zNTUSER | Out-Null
+reg unload HKLM\zSOFTWARE | Out-Null
+reg unload HKLM\zSYSTEM | Out-Null
+
+# Inject IRST driver into boot.wim (Windows Setup) if provided
+if ($IrstDriverPath -or (Test-Path (Join-Path $scriptRoot "IRST_Driver"))) {
+    Add-DriverToImage -MountPath $scratchDir -DriverPath $IrstDriverPath -ImageName "boot.wim (Windows Setup)"
+}
+
+# Unmount boot.wim (keeping both indexes intact)
+Write-Host "Unmounting boot.wim image..." -ForegroundColor Cyan
+Dismount-WindowsImage -Path $scratchDir -Save
+Write-Host "✓ boot.wim modifications completed" -ForegroundColor Green
+
 # Create ISO (same as tiny11maker.ps1)
 Write-Host "The LTSC image is now completed. Proceeding with the making of the ISO..." -ForegroundColor Cyan
-Write-Host "Creating ISO image..." -ForegroundColor Cyan
 
-# Determine script root directory (works in both local and GitHub Actions)
-$scriptRoot = $PSScriptRoot
-if (-not $scriptRoot) {
-    # Fallback for GitHub Actions or when script is dot-sourced
-    $scriptRoot = if ($env:GITHUB_WORKSPACE) { $env:GITHUB_WORKSPACE } else { $PWD.Path }
+# Copy autounattend.xml to ISO root for bypassing MS account on OOBE (same as tiny11maker.ps1)
+$autounattendPath = Join-Path $scriptRoot "autounattend.xml"
+if (Test-Path $autounattendPath) {
+    Write-Host "Copying autounattend.xml to ISO root for bypassing MS account on OOBE..." -ForegroundColor Cyan
+    Copy-Item -Path $autounattendPath -Destination "$mainOSDrive\ltsc\autounattend.xml" -Force | Out-Null
+    Write-Host "autounattend.xml copied to ISO root" -ForegroundColor Green
+} else {
+    Write-Warning "autounattend.xml not found, OOBE bypass may not work"
 }
+
+Write-Host "Creating ISO image..." -ForegroundColor Cyan
 
 $hostArchitecture = $Env:PROCESSOR_ARCHITECTURE
 $ADKDepTools = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\$hostArchitecture\Oscdimg"
