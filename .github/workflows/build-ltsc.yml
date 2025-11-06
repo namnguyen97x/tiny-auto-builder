@@ -398,8 +398,59 @@ jobs:
               }
 
               if ($stillMissing.Count -gt 0) {
-                Write-Error "Failed to prepare required Store packages (after all fallbacks): $($stillMissing -join ', ')"
-                exit 1
+                Write-Host "Required bundles still missing after Releases. Trying alternate sources..." -ForegroundColor Yellow
+
+                # 1) Desktop App Installer from microsoft/winget-cli releases
+                try {
+                  $headers = @{ 'User-Agent' = 'tiny-auto-builder' }
+                  if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)" }
+                  $wingetUrl = 'https://api.github.com/repos/microsoft/winget-cli/releases'
+                  $wingetResp = Invoke-WebRequest -Uri $wingetUrl -UseBasicParsing -Headers $headers -ErrorAction Stop
+                  $wingetReleases = $wingetResp.Content | ConvertFrom-Json
+                  if ($wingetReleases -and $wingetReleases.Count -gt 0) {
+                    $wingetAssets = @()
+                    foreach ($r in ($wingetReleases | Select-Object -First 10)) {
+                      if ($r.assets) { $wingetAssets += $r.assets }
+                    }
+                    $appx = $wingetAssets | Where-Object { $_.name -like 'Microsoft.DesktopAppInstaller*_8wekyb3d8bbwe*.msixbundle' } | Sort-Object name -Descending | Select-Object -First 1
+                    if ($appx -and $appx.browser_download_url) {
+                      $outPath = Join-Path $storeDir $appx.name
+                      Write-Host "Downloading App Installer from winget-cli: $($appx.name)" -ForegroundColor Cyan
+                      Invoke-WebRequest -Uri $appx.browser_download_url -OutFile $outPath -UseBasicParsing -Headers $headers
+                      if (Test-Path $outPath) {
+                        Write-Host "✓ Downloaded App Installer from winget-cli" -ForegroundColor Green
+                        $stillMissing = $stillMissing | Where-Object { $_ -notlike 'Microsoft.DesktopAppInstaller*' }
+                      }
+                    }
+                  }
+                } catch {
+                  Write-Host "Warning: winget-cli fallback failed: $_" -ForegroundColor Yellow
+                }
+
+                # 2) Windows Store bundle from kkkgo/LTSC-Add-MicrosoftStore
+                try {
+                  $kkRepo = 'https://api.github.com/repos/kkkgo/LTSC-Add-MicrosoftStore/contents'
+                  $kkHeaders = @{ 'User-Agent' = 'tiny-auto-builder' }
+                  $kkResp = Invoke-WebRequest -Uri $kkRepo -UseBasicParsing -Headers $kkHeaders -ErrorAction Stop
+                  $kkFiles = $kkResp.Content | ConvertFrom-Json
+                  $storeFile = $kkFiles | Where-Object { $_.type -eq 'file' -and ($_.name -like 'Microsoft.WindowsStore*appxbundle' -or $_.name -like 'Microsoft.WindowsStore*msixbundle') } | Sort-Object name -Descending | Select-Object -First 1
+                  if ($storeFile -and $storeFile.download_url) {
+                    $outPath = Join-Path $storeDir $storeFile.name
+                    Write-Host "Downloading Windows Store from kkkgo repo: $($storeFile.name)" -ForegroundColor Cyan
+                    Invoke-WebRequest -Uri $storeFile.download_url -OutFile $outPath -UseBasicParsing
+                    if (Test-Path $outPath) {
+                      Write-Host "✓ Downloaded Windows Store from kkkgo repo" -ForegroundColor Green
+                      $stillMissing = $stillMissing | Where-Object { $_ -notlike 'Microsoft.WindowsStore*' }
+                    }
+                  }
+                } catch {
+                  Write-Host "Warning: kkkgo Store fallback failed: $_" -ForegroundColor Yellow
+                }
+
+                if ($stillMissing.Count -gt 0) {
+                  Write-Error "Failed to prepare required Store packages (after all fallbacks): $($stillMissing -join ', ')"
+                  exit 1
+                }
               }
             }
           }
