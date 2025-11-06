@@ -389,11 +389,11 @@ if ($NonInteractive) {
             # Sort by priority and select the best one
             $bestEdition = $targetEditions | Sort-Object Priority | Select-Object -First 1
             $index = $bestEdition.Index
-            Write-Output "Found edition: $($bestEdition.Name) (Index: $index)" -ForegroundColor Green
+            Write-Host "Found edition: $($bestEdition.Name) (Index: $index)" -ForegroundColor Green
         } else {
             # Fallback to index 1 if not found
             $index = 1
-            Write-Output "Requested edition not found, using default index: $index" -ForegroundColor Yellow
+            Write-Host "Requested edition not found, using default index: $index" -ForegroundColor Yellow
         }
     }
 } else {
@@ -493,15 +493,15 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
         $storePackages = $currentPackages | Where-Object { $_.PackageName -like '*WindowsStore*' -or $_.PackageName -like '*StorePurchaseApp*' -or $_.PackageName -like '*Store.Engagement*' }
         
         if ($storePackages.Count -eq 0) {
-            Write-Output "  No Store packages found (may have been removed already by debloater)" -ForegroundColor Gray
+            Write-Host "  No Store packages found (may have been removed already by debloater)" -ForegroundColor Gray
         } else {
             foreach ($storePkg in $storePackages) {
                 Write-Output "  Removing: $($storePkg.PackageName)"
                 try {
                     Remove-ProvisionedAppxPackage -Path "$ScratchDisk\scratchdir" -PackageName $storePkg.PackageName -ErrorAction Stop | Out-Null
-                    Write-Output "    ✓ Removed successfully" -ForegroundColor Green
+                    Write-Host "    ✓ Removed successfully" -ForegroundColor Green
                 } catch {
-                    Write-Output "    ⚠ Warning: Failed to remove $($storePkg.PackageName) - $($_.Exception.Message)" -ForegroundColor Yellow
+                    Write-Host "    ⚠ Warning: Failed to remove $($storePkg.PackageName) - $($_.Exception.Message)" -ForegroundColor Yellow
                 }
             }
         }
@@ -516,15 +516,15 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
         $aiPackages = $currentPackages | Where-Object { $_.PackageName -like '*Copilot*' -or $_.PackageName -like '*549981C3F5F10*' }
         
         if ($aiPackages.Count -eq 0) {
-            Write-Output "  No AI packages found (may have been removed already by debloater)" -ForegroundColor Gray
+            Write-Host "  No AI packages found (may have been removed already by debloater)" -ForegroundColor Gray
         } else {
             foreach ($aiPkg in $aiPackages) {
                 Write-Output "  Removing: $($aiPkg.PackageName)"
                 try {
                     Remove-ProvisionedAppxPackage -Path "$ScratchDisk\scratchdir" -PackageName $aiPkg.PackageName -ErrorAction Stop | Out-Null
-                    Write-Output "    ✓ Removed successfully" -ForegroundColor Green
+                    Write-Host "    ✓ Removed successfully" -ForegroundColor Green
                 } catch {
-                    Write-Output "    ⚠ Warning: Failed to remove $($aiPkg.PackageName) - $($_.Exception.Message)" -ForegroundColor Yellow
+                    Write-Host "    ⚠ Warning: Failed to remove $($aiPkg.PackageName) - $($_.Exception.Message)" -ForegroundColor Yellow
                 }
             }
         }
@@ -646,7 +646,7 @@ if ($EnableDebloat -ne 'yes' -or -not (Get-Module -Name tiny11-debloater)) {
         Write-Output "Removing $package"
         $result = & 'dism' '/English' "/image:$($ScratchDisk)\scratchdir" '/Remove-ProvisionedAppxPackage' "/PackageName:$package" 2>&1
         if ($LASTEXITCODE -ne 0 -or ($result | Select-String -Pattern "Error|failed|not found" -Quiet)) {
-            Write-Output "  Warning: Failed to remove $package (continuing...)" -ForegroundColor Yellow
+            Write-Host "  Warning: Failed to remove $package (continuing...)" -ForegroundColor Yellow
         }
     }
 
@@ -849,7 +849,7 @@ if ($RemoveDefender -eq 'yes') {
                 Write-Output "  Removing Defender package: $packageIdentity"
                 $result = & dism /English /image:"$ScratchDisk\scratchdir" /Remove-Package /PackageName:$packageIdentity 2>&1
                 if ($LASTEXITCODE -ne 0 -or ($result | Select-String -Pattern "Removal failed|Error|failed" -Quiet)) {
-                    Write-Output "  Warning: Failed to remove Defender package $packageIdentity (continuing...)" -ForegroundColor Yellow
+                    Write-Host "  Warning: Failed to remove Defender package $packageIdentity (continuing...)" -ForegroundColor Yellow
                 }
             }
         }
@@ -1103,7 +1103,7 @@ $isoFileName = if ($IsoName -and $IsoName.Trim() -ne '') {
 
 Write-Output "Running oscdimg to create ISO..."
 $isoPath = "$PSScriptRoot\$isoFileName"
-Write-Output "ISO will be saved as: $isoFileName" -ForegroundColor Cyan
+Write-Host "ISO will be saved as: $isoFileName" -ForegroundColor Cyan
 try {
     & "$OSCDIMG" '-m' '-o' '-u2' '-udfver102' "-bootdata:2#p0,e,b$ScratchDisk\tiny11\boot\etfsboot.com#pEF,e,b$ScratchDisk\tiny11\efi\microsoft\boot\efisys.bin" "$ScratchDisk\tiny11" $isoPath 2>&1 | Out-Null
     
@@ -1115,7 +1115,7 @@ try {
     }
     
     $isoSize = (Get-Item $isoPath).Length / 1GB
-    Write-Output "✓ ISO created successfully: $isoPath" -ForegroundColor Green
+    Write-Host "✓ ISO created successfully: $isoPath" -ForegroundColor Green
     Write-Output "  ISO size: $([math]::Round($isoSize, 2)) GB"
 } catch {
     Write-Error "Failed to create ISO: $($_.Exception.Message)"

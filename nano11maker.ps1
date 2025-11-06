@@ -313,11 +313,11 @@ if ($NonInteractive) {
             # Sort by priority and select the best one
             $bestEdition = $targetEditions | Sort-Object Priority | Select-Object -First 1
             $index = $bestEdition.Index
-            Write-Output "Found edition: $($bestEdition.Name) (Index: $index)" -ForegroundColor Green
+            Write-Host "Found edition: $($bestEdition.Name) (Index: $index)" -ForegroundColor Green
         } else {
             # Fallback to index 1 if not found
             $index = 1
-            Write-Output "Requested edition not found, using default index: $index" -ForegroundColor Yellow
+            Write-Host "Requested edition not found, using default index: $index" -ForegroundColor Yellow
         }
     }
 } else {
@@ -1244,7 +1244,7 @@ try {
     }
     
     $isoSize = (Get-Item $isoPath).Length / 1GB
-    Write-Output "✓ ISO created successfully: $isoPath" -ForegroundColor Green
+    Write-Host "✓ ISO created successfully: $isoPath" -ForegroundColor Green
     Write-Output "  ISO size: $([math]::Round($isoSize, 2)) GB"
     Write-Output "Creation completed! Your ISO is named $isoFileName"
 } catch {
