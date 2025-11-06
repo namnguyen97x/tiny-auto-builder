@@ -31,7 +31,7 @@ on:
         default: 'yes'
         type: string
       remove_ai:
-        description: 'Remove AI/Copilot (default: no, LTSC thường không có AI chính thức)'
+        description: 'Remove AI/Copilot (default: no, LTSC typically does not have official AI support)'
         required: false
         default: 'no'
         type: string
@@ -70,7 +70,7 @@ on:
         default: true
         type: boolean
       remove_ai:
-        description: 'Remove AI/Copilot (LTSC thường không có AI chính thức)'
+        description: 'Remove AI/Copilot (LTSC typically does not have official AI support)'
         required: false
         default: false
         type: boolean
