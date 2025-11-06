@@ -366,8 +366,41 @@ jobs:
             }
 
             if ($stillMissing.Count -gt 0) {
-              Write-Error "Failed to prepare required Store packages (after fallback): $($stillMissing -join ', ')"
-              exit 1
+              Write-Host "Required bundles still missing after clone/zip. Trying Releases assets..." -ForegroundColor Yellow
+
+              try {
+                $headers = @{ 'User-Agent' = 'tiny-auto-builder' }
+                if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)" }
+                $relUrl = 'https://api.github.com/repos/namnguyen97x/LTSC-Add-Microsoft-Store/releases'
+                $relResp = Invoke-WebRequest -Uri $relUrl -UseBasicParsing -Headers $headers -ErrorAction Stop
+                $releases = $relResp.Content | ConvertFrom-Json
+                if ($releases -and $releases.Count -gt 0) {
+                  # Flatten all assets from recent releases (limit to first 5)
+                  $assets = @()
+                  foreach ($r in ($releases | Select-Object -First 5)) {
+                    if ($r.assets) { $assets += $r.assets }
+                  }
+                  foreach ($pat in @('Microsoft.WindowsStore*_neutral___8wekyb3d8bbwe.Msixbundle','Microsoft.DesktopAppInstaller*_neutral___8wekyb3d8bbwe.Msixbundle')) {
+                    $cand = $assets | Where-Object { $_.name -like $pat } | Sort-Object name -Descending | Select-Object -First 1
+                    if ($cand -and $cand.browser_download_url) {
+                      $outPath = Join-Path $storeDir $cand.name
+                      Write-Host "Downloading from Releases: $($cand.name)" -ForegroundColor Cyan
+                      Invoke-WebRequest -Uri $cand.browser_download_url -OutFile $outPath -UseBasicParsing -Headers $headers
+                      if (Test-Path $outPath) {
+                        Write-Host "✓ Downloaded release asset: $($cand.name)" -ForegroundColor Green
+                        $stillMissing = $stillMissing | Where-Object { $_ -notlike $pat }
+                      }
+                    }
+                  }
+                }
+              } catch {
+                Write-Host "Warning: Failed to download from Releases: $_" -ForegroundColor Yellow
+              }
+
+              if ($stillMissing.Count -gt 0) {
+                Write-Error "Failed to prepare required Store packages (after all fallbacks): $($stillMissing -join ', ')"
+                exit 1
+              }
             }
           }
           
