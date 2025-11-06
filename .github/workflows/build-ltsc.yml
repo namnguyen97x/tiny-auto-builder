@@ -316,10 +316,59 @@ jobs:
             }
           }
           
-          # Check if any required packages failed
+          # Check if any required packages failed - try local repo fallback before failing
           if ($failedRequired.Count -gt 0) {
-            Write-Error "Failed to download required Store packages: $($failedRequired -join ', ')"
-            exit 1
+            Write-Host "Some required packages failed to download, attempting local repo fallback..." -ForegroundColor Yellow
+
+            $repoUrl = 'https://github.com/namnguyen97x/LTSC-Add-Microsoft-Store.git'
+            $repoDir = Join-Path $env:RUNNER_TEMP 'LTSC-Add-Microsoft-Store'
+            if (Test-Path $repoDir) { Remove-Item -Recurse -Force $repoDir }
+            New-Item -ItemType Directory -Force -Path $repoDir | Out-Null
+
+            $cloned = $false
+            try {
+              git --version | Out-Null
+              Write-Host "Cloning repository: $repoUrl"
+              git clone --depth=1 $repoUrl $repoDir | Out-Host
+              if (Test-Path (Join-Path $repoDir '.git')) { $cloned = $true }
+            } catch {
+              Write-Host "git not available or clone failed: $_" -ForegroundColor Yellow
+            }
+
+            if (-not $cloned) {
+              Write-Host "Falling back to zip download..." -ForegroundColor Yellow
+              $zipUrl = 'https://codeload.github.com/namnguyen97x/LTSC-Add-Microsoft-Store/zip/refs/heads/master'
+              $zipPath = Join-Path $env:RUNNER_TEMP 'store.zip'
+              Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+              Expand-Archive -Path $zipPath -DestinationPath $repoDir -Force
+              $expanded = Get-ChildItem -Path $repoDir | Where-Object { $_.PSIsContainer } | Select-Object -First 1
+              if ($expanded) { $repoDir = $expanded.FullName }
+            }
+
+            # Map failed required names to search patterns
+            $searchPatterns = @()
+            foreach ($name in $failedRequired) {
+              if ($name -like 'Microsoft.WindowsStore*') { $searchPatterns += 'Microsoft.WindowsStore*_neutral___8wekyb3d8bbwe.Msixbundle'; continue }
+              if ($name -like 'Microsoft.DesktopAppInstaller*') { $searchPatterns += 'Microsoft.DesktopAppInstaller*_neutral___8wekyb3d8bbwe.Msixbundle'; continue }
+              $searchPatterns += $name
+            }
+
+            $stillMissing = @()
+            foreach ($pat in $searchPatterns) {
+              $matches = Get-ChildItem -Path $repoDir -Recurse -Include $pat -ErrorAction SilentlyContinue
+              if ($matches -and $matches.Count -gt 0) {
+                $pick = $matches | Sort-Object Name -Descending | Select-Object -First 1
+                Copy-Item -Path $pick.FullName -Destination (Join-Path $storeDir $pick.Name) -Force
+                Write-Host "✓ Fallback copied: $($pick.Name)" -ForegroundColor Green
+              } else {
+                $stillMissing += $pat
+              }
+            }
+
+            if ($stillMissing.Count -gt 0) {
+              Write-Error "Failed to prepare required Store packages (after fallback): $($stillMissing -join ', ')"
+              exit 1
+            }
           }
           
           # Warn about optional packages but don't fail
