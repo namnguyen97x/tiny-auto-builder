@@ -209,7 +209,7 @@ if ((Test-Path "$DriveLetter\sources\boot.wim") -eq $false -or (Test-Path "$Driv
     if ((Test-Path "$DriveLetter\sources\install.esd") -eq $true) {
         Write-Output "Found install.esd, converting to install.wim..."
         $esdInfo = Get-WindowsImage -ImagePath "$DriveLetter\sources\install.esd"
-        $esdInfo | Format-Table -AutoSize
+        $esdInfo | Format-Table -AutoSize | Out-String | Write-Host
         
         if ($NonInteractive) {
             # Auto-detect image index (use first available index, usually 1)
@@ -239,7 +239,7 @@ if (Test-Path "$mainOSDrive\nano11\sources\install.esd") {
 
 Write-Output "Getting image information:"
 $wimInfoAll = Get-WindowsImage -ImagePath "$mainOSDrive\nano11\sources\install.wim"
-$wimInfoAll | Format-Table -AutoSize
+$wimInfoAll | Format-Table -AutoSize | Out-String | Write-Host
 $ImagesIndex = $wimInfoAll.ImageIndex
 
 if ($NonInteractive) {
@@ -323,7 +323,7 @@ if ($NonInteractive) {
 } else {
     # In interactive mode, validate index
     while ($ImagesIndex -notcontains $index) {
-        $wimInfoAll | Format-Table -AutoSize
+        $wimInfoAll | Format-Table -AutoSize | Out-String | Write-Host
         $index = Read-Host "Please enter the image index"
     }
 }
