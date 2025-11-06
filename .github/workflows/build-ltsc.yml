@@ -475,7 +475,7 @@ jobs:
           $isoDriveLetter = $volume.DriveLetter
 
           if ($isoDriveLetter) {
-            $isoDrive = "$isoDriveLetter:"
+            $isoDrive = "${isoDriveLetter}:"
             Write-Host "✓ ISO mounted to: $isoDrive" -ForegroundColor Green
             echo "ISO_DRIVE=$isoDrive" >> $env:GITHUB_ENV
             echo "ISO_FILE_PATH=$isoFilePath" >> $env:GITHUB_ENV
