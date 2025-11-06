@@ -51,9 +51,16 @@ $DisableAds = 'yes'
 # $RemoveAI được set từ parameter (không hardcode nữa)
 $RemoveStore = if ($AddStore -eq 'yes') { 'no' } else { 'yes' }  # Remove Store if AddStore=no
 
+# Determine script root directory (works in both local and GitHub Actions)
+$scriptRoot = $PSScriptRoot
+if (-not $scriptRoot) {
+    # Fallback for GitHub Actions or when script is dot-sourced
+    $scriptRoot = if ($env:GITHUB_WORKSPACE) { $env:GITHUB_WORKSPACE } else { $PWD.Path }
+}
+
 # Import debloater module
 if ($EnableDebloat -eq 'yes') {
-    $modulePath = Join-Path $PSScriptRoot "tiny11-debloater.psm1"
+    $modulePath = Join-Path $scriptRoot "tiny11-debloater.psm1"
     if (Test-Path $modulePath) {
         Import-Module $modulePath -Force -ErrorAction SilentlyContinue
         Write-Host "Debloater module loaded" -ForegroundColor Green
@@ -244,7 +251,7 @@ function Add-DriverToImage {
     
     # If no driver path provided, try to use IRST_Driver folder in project root
     if (-not $DriverPath -or -not (Test-Path $DriverPath)) {
-        $projectIrstFolder = Join-Path $PSScriptRoot "IRST_Driver"
+        $projectIrstFolder = Join-Path $scriptRoot "IRST_Driver"
         if (Test-Path $projectIrstFolder) {
             Write-Host "Using IRST driver from project folder: $projectIrstFolder" -ForegroundColor Cyan
             $DriverPath = $projectIrstFolder
@@ -500,7 +507,7 @@ reg unload HKLM\zSOFTWARE | Out-Null
 reg unload HKLM\zSYSTEM | Out-Null
 
 # Inject IRST driver into install.wim if provided or if IRST_Driver folder exists
-if ($IrstDriverPath -or (Test-Path (Join-Path $PSScriptRoot "IRST_Driver"))) {
+if ($IrstDriverPath -or (Test-Path (Join-Path $scriptRoot "IRST_Driver"))) {
     Add-DriverToImage -MountPath $scratchDir -DriverPath $IrstDriverPath -ImageName "install.wim"
 }
 
@@ -608,55 +615,86 @@ Write-Host "Cleaning up image..." -ForegroundColor Cyan
 Write-Host "Unmounting image..." -ForegroundColor Cyan
 Dismount-WindowsImage -Path $scratchDir -Save
 
-# Create ISO
-Write-Host "Creating ISO file: $IsoName" -ForegroundColor Cyan
-$isoPath = Join-Path $PSScriptRoot $IsoName
+# Create ISO (same as tiny11maker.ps1)
+Write-Host "The LTSC image is now completed. Proceeding with the making of the ISO..." -ForegroundColor Cyan
+Write-Host "Creating ISO image..." -ForegroundColor Cyan
 
-# Find oscdimg
-$oscdimg = $null
-$oscdimgPaths = @(
-    "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe",
-    "C:\Program Files\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe",
-    "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\oscdimg.exe"
-)
+# Determine script root directory (works in both local and GitHub Actions)
+$scriptRoot = $PSScriptRoot
+if (-not $scriptRoot) {
+    # Fallback for GitHub Actions or when script is dot-sourced
+    $scriptRoot = if ($env:GITHUB_WORKSPACE) { $env:GITHUB_WORKSPACE } else { $PWD.Path }
+}
 
-foreach ($path in $oscdimgPaths) {
-    if (Test-Path $path) {
-        $oscdimg = $path
-        break
+$hostArchitecture = $Env:PROCESSOR_ARCHITECTURE
+$ADKDepTools = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\$hostArchitecture\Oscdimg"
+$localOSCDIMGPath = Join-Path $scriptRoot "oscdimg.exe"
+
+if ([System.IO.Directory]::Exists($ADKDepTools)) {
+    Write-Host "Will be using oscdimg.exe from system ADK." -ForegroundColor Green
+    $OSCDIMG = "$ADKDepTools\oscdimg.exe"
+} else {
+    Write-Host "ADK folder not found. Will be using bundled oscdimg.exe." -ForegroundColor Yellow
+    $url = "https://msdl.microsoft.com/download/symbols/oscdimg.exe/3D44737265000/oscdimg.exe"
+
+    if (-not (Test-Path -Path $localOSCDIMGPath)) {
+        Write-Host "Downloading oscdimg.exe..." -ForegroundColor Cyan
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $localOSCDIMGPath -ErrorAction Stop
+            if (Test-Path $localOSCDIMGPath) {
+                Write-Host "oscdimg.exe downloaded successfully." -ForegroundColor Green
+            } else {
+                Write-Error "Failed to download oscdimg.exe."
+                exit 1
+            }
+        } catch {
+            Write-Error "Failed to download oscdimg.exe: $_"
+            exit 1
+        }
+    } else {
+        Write-Host "oscdimg.exe already exists locally." -ForegroundColor Green
     }
+
+    $OSCDIMG = $localOSCDIMGPath
 }
 
-if (-not $oscdimg) {
-    $oscdimg = Get-Command oscdimg -ErrorAction SilentlyContinue
-    if ($oscdimg) {
-        $oscdimg = $oscdimg.Source
+# Determine ISO filename
+$isoFileName = if ($IsoName -and $IsoName.Trim() -ne '') {
+    # Use custom name if provided, ensure it has .iso extension
+    $name = $IsoName.Trim()
+    if (-not $name.EndsWith('.iso', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $name = "$name.iso"
     }
+    $name
+} else {
+    'ltsc-store.iso'
 }
 
-if (-not $oscdimg -or -not (Test-Path $oscdimg)) {
-    Write-Error "oscdimg not found. Please install Windows ADK (Assessment and Deployment Kit)."
-    Write-Host "Download from: https://go.microsoft.com/fwlink/?linkid=2196127" -ForegroundColor Yellow
-    exit 1
-}
+Write-Host "Running oscdimg to create ISO..." -ForegroundColor Cyan
+$isoPath = Join-Path $scriptRoot $isoFileName
+Write-Host "ISO will be saved as: $isoFileName" -ForegroundColor Cyan
+Write-Host "ISO path: $isoPath" -ForegroundColor Gray
 
-Write-Host "Using oscdimg: $oscdimg" -ForegroundColor Gray
-
-$bootData = "2#p0,e,b$mainOSDrive\ltsc\boot\etfsboot.com#pEF,e,b$mainOSDrive\ltsc\efi\microsoft\boot\efisys.bin"
-
-Write-Host "Running oscdimg to create ISO..."
-& $oscdimg '-m' '-o' '-u2' '-udfver102' "-bootdata:$bootData" "$mainOSDrive\ltsc" $isoPath 2>&1 | Out-Null
-
-if (Test-Path $isoPath) {
+try {
+    $bootData = "2#p0,e,b$mainOSDrive\ltsc\boot\etfsboot.com#pEF,e,b$mainOSDrive\ltsc\efi\microsoft\boot\efisys.bin"
+    & $OSCDIMG '-m' '-o' '-u2' '-udfver102' "-bootdata:$bootData" "$mainOSDrive\ltsc" $isoPath 2>&1 | Out-Null
+    
+    # Verify ISO was created
+    Start-Sleep -Seconds 2
+    if (-not (Test-Path $isoPath)) {
+        Write-Error "ISO was not created at expected path: $isoPath"
+        exit 1
+    }
+    
     $isoSize = (Get-Item $isoPath).Length / 1GB
     Write-Host "✓ ISO created successfully: $isoPath" -ForegroundColor Green
-    Write-Host "  Size: $([math]::Round($isoSize, 2)) GB" -ForegroundColor Green
+    Write-Host "  ISO size: $([math]::Round($isoSize, 2)) GB" -ForegroundColor Green
     
     # Output ISO path for workflow (use Write-Output for parsing)
     Write-Output "ISO_PATH=$isoPath"
-    Write-Output "ISO_NAME=$IsoName"
-} else {
-    Write-Error "ISO creation failed"
+    Write-Output "ISO_NAME=$isoFileName"
+} catch {
+    Write-Error "Failed to create ISO: $($_.Exception.Message)"
     exit 1
 }
 
