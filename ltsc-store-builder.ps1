@@ -463,6 +463,26 @@ Write-Host "Ensuring Store policies and services are enabled..." -ForegroundColo
 & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\AppXSvc' '/v' 'DelayedAutoStart' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' '/v' 'NoUseStoreOpenWith' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 
+# First-boot fix: re-register Store/App Installer and reset cache
+try {
+    $setupScriptsDir = "$scratchDir\Windows\Setup\Scripts"
+    if (-not (Test-Path $setupScriptsDir)) { New-Item -ItemType Directory -Path $setupScriptsDir -Force | Out-Null }
+    $firstBootCmd = Join-Path $setupScriptsDir 'FirstBoot-StoreFix.cmd'
+    $cmdContent = @"
+@echo off
+REM Ensure services
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Try { Set-Service -Name ClipSVC -StartupType Manual; Start-Service ClipSVC; Set-Service -Name AppXSVC -StartupType Manual; Start-Service AppXSVC } Catch {}"
+REM Re-register Store and App Installer for all users
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$pkgs = 'Microsoft.WindowsStore','Microsoft.DesktopAppInstaller','Microsoft.StorePurchaseApp','Microsoft.XboxIdentityProvider'; foreach($n in $pkgs){ try { $p = Get-AppxPackage -AllUsers $n -ErrorAction SilentlyContinue; if($p -and (Test-Path \"$($p.InstallLocation)\\AppxManifest.xml\")){ Add-AppxPackage -DisableDevelopmentMode -Register \"$($p.InstallLocation)\\AppxManifest.xml\" -ErrorAction SilentlyContinue } } catch {} }"
+REM Reset Store cache (ignore errors on LTSC)
+wsreset.exe 2>nul
+exit /b 0
+"@
+    Set-Content -LiteralPath $firstBootCmd -Value $cmdContent -Encoding ASCII -Force
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' '/v' 'FirstBootStoreFix' '/t' 'REG_SZ' '/d' 'C:\\Windows\\Setup\\Scripts\\FirstBoot-StoreFix.cmd' '/f' | Out-Null
+    Write-Host "Scheduled first-boot Store re-registration via RunOnce" -ForegroundColor Green
+} catch { Write-Warning "Failed to stage first-boot Store fix: $_" }
+
 # Bypass system requirements
 Write-Host "Bypassing system requirements..." -ForegroundColor Cyan
 & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
