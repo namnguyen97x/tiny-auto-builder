@@ -189,7 +189,7 @@ function Add-DriverToImage {
                 Write-Warning "Output: $outputString"
             }
         } catch {
-            Write-Warning "Error injecting IRST driver into $ImageName: $($_.Exception.Message)"
+            Write-Warning "Error injecting IRST driver into ${ImageName}: $($_.Exception.Message)"
         }
     }
 }
