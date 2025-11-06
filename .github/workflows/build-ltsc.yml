@@ -36,9 +36,9 @@ on:
         default: 'no'
         type: string
       add_thorium:
-        description: 'Add Thorium browser to replace Edge (default: yes, only if Edge is removed)'
+        description: 'Add Thorium browser (independent of Edge removal, default: no)'
         required: false
-        default: 'yes'
+        default: 'no'
         type: string
       iso_name:
         description: 'Custom ISO filename (leave empty to use default: ltsc-store.iso)'
@@ -80,9 +80,9 @@ on:
         default: false
         type: boolean
       add_thorium:
-        description: 'Add Thorium browser to replace Edge (only if Edge is removed)'
+        description: 'Add Thorium browser (independent of Edge removal)'
         required: false
-        default: true
+        default: false
         type: boolean
       iso_name:
         description: 'Custom ISO filename (leave empty to use default: ltsc-store.iso)'
@@ -329,7 +329,7 @@ jobs:
           REMOVE_DEFENDER: ${{ github.event.inputs.remove_defender || inputs.remove_defender || 'no' }}
           REMOVE_EDGE: ${{ github.event.inputs.remove_edge || inputs.remove_edge || 'yes' }}
           REMOVE_AI: ${{ github.event.inputs.remove_ai || inputs.remove_ai || 'no' }}
-          ADD_THORIUM: ${{ github.event.inputs.add_thorium || inputs.add_thorium || 'yes' }}
+          ADD_THORIUM: ${{ github.event.inputs.add_thorium || inputs.add_thorium || 'no' }}
         run: |
           $ErrorActionPreference = 'Continue'
           $buildStartTime = Get-Date
@@ -368,7 +368,7 @@ jobs:
           $removeDefender = Convert-ToYesNo $env:REMOVE_DEFENDER 'no'
           $removeEdge = Convert-ToYesNo $env:REMOVE_EDGE 'yes'
           $removeAI = Convert-ToYesNo $env:REMOVE_AI 'no'
-          $addThorium = Convert-ToYesNo $env:ADD_THORIUM 'yes'
+          $addThorium = Convert-ToYesNo $env:ADD_THORIUM 'no'
           
           # Validate Store packages directory AFTER converting AddStore
           $storeDir = $env:STORE_PACKAGES_DIR

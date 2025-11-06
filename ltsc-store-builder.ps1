@@ -79,12 +79,8 @@ Write-Host "Drive Letter: $DriveLetter"
 Write-Host "Store Packages: $StorePackagesDir"
 Write-Host "Target Edition: $Edition"
 Write-Host "ISO Name: $IsoName"
-Write-Host "Debloat options: Defender=$RemoveDefender, AI=$RemoveAI, Edge=$RemoveEdge, Store=$RemoveStore, AddStore=$AddStore, Thorium=$AddThorium" -ForegroundColor Cyan
-
-# Auto-enable Thorium if Edge is removed
-if ($RemoveEdge -eq 'yes' -and $AddThorium -eq 'yes') {
-    Write-Host "Edge will be removed, Thorium will be added as replacement browser" -ForegroundColor Yellow
-}
+Write-Host "Debloat options: Defender=$RemoveDefender, AI=$RemoveAI, Edge=$RemoveEdge, Store=$RemoveStore, AddStore=$AddStore" -ForegroundColor Cyan
+Write-Host "Browser options: AddThorium=$AddThorium" -ForegroundColor Cyan
 
 # Validate inputs
 if (-not (Test-Path "$DriveLetter\sources\install.wim") -and -not (Test-Path "$DriveLetter\sources\install.esd")) {
@@ -761,8 +757,8 @@ if ($AddStore -eq 'yes' -and $StorePackagesDir -and (Test-Path $StorePackagesDir
     }
 }
 
-# Add Thorium browser if Edge is removed
-if ($RemoveEdge -eq 'yes' -and $AddThorium -eq 'yes') {
+# Add Thorium browser (independent of Edge removal)
+if ($AddThorium -eq 'yes') {
     Write-Host "=== Adding Thorium Browser ===" -ForegroundColor Cyan
     Write-Host "Note: Adding Thorium will increase image size (~150-200MB)" -ForegroundColor Yellow
     
