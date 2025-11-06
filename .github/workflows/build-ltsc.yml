@@ -97,11 +97,11 @@ jobs:
   build:
     runs-on: windows-2022
     timeout-minutes: 180
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Setup PowerShell and Environment
         shell: pwsh
         run: |
@@ -109,58 +109,92 @@ jobs:
           Write-Host "PowerShell version: $($PSVersionTable.PSVersion)"
           Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
           $PSDefaultParameterValues['*:ErrorAction'] = 'SilentlyContinue'
-          
+
           Write-Host "=== System Information ===" -ForegroundColor Cyan
           Write-Host "CPU Cores: $env:NUMBER_OF_PROCESSORS"
           Write-Host "OS Version: $([System.Environment]::OSVersion.VersionString)"
-          
+
           $drive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -gt 0 } | Select-Object -First 1
           if ($drive) {
             $freeSpaceGB = [math]::Round($drive.Free / 1GB, 2)
             Write-Host "Available disk space: $freeSpaceGB GB"
           }
-          
+
           $env:DISM_MAX_THREADS = $env:NUMBER_OF_PROCESSORS
           Write-Host "DISM optimization: Max threads = $env:DISM_MAX_THREADS"
-      
-      - name: Download Microsoft Store Packages
+
+      - name: Download Microsoft Store Packages (fixed)
         shell: pwsh
         id: download-store
         env:
           ADD_STORE: ${{ github.event.inputs.add_store || inputs.add_store || 'yes' }}
         run: |
-          # Helper function to convert boolean/string to yes/no
+          # region helpers
           function Convert-ToYesNo {
             param($value, $default = 'yes')
             if (-not $value) { return $default }
             $str = $value.ToString().ToLower()
-            if ($str -eq 'true' -or $str -eq '1' -or $str -eq 'yes') { return 'yes' }
+            if ($str -in @('true','1','yes','y')) { return 'yes' }
             return 'no'
           }
-          
+
+          function New-HttpHeaders {
+            $h = @{ 'User-Agent' = 'tiny-auto-builder' }
+            if ($env:GITHUB_TOKEN) { $h['Authorization'] = "Bearer $($env:GITHUB_TOKEN)" }
+            return $h
+          }
+
+          function Get-RepoFiles {
+            param([string]$ApiUrl)
+            try {
+              $r = Invoke-WebRequest -Uri $ApiUrl -UseBasicParsing -Headers (New-HttpHeaders) -ErrorAction Stop
+              (($r.Content | ConvertFrom-Json) | Where-Object { $_.type -eq 'file' }).name
+            } catch { @() }
+          }
+
+          function Resolve-FromList {
+            param(
+              [string]$Pattern,
+              [string[]]$List
+            )
+            if (-not $List -or $List.Count -eq 0) { return $null }
+            # Convert wildcard to regex and sort descending to prefer newer versions
+            $regex = '^' + [Regex]::Escape($Pattern).Replace('\*','.*').Replace('\?','.') + '$'
+            $List | Where-Object { $_ -match $regex } | Sort-Object -Descending | Select-Object -First 1
+          }
+
+          function Resolve-RepoFileName {
+            param([string]$Pattern)
+            $api = 'https://api.github.com/repos/namnguyen97x/LTSC-Add-Microsoft-Store/contents'
+            $list = Get-RepoFiles -ApiUrl $api
+            if ($list) { return (Resolve-FromList -Pattern $Pattern -List $list) }
+            return $null
+          }
+
+          function Has-Wildcard {
+            param([string]$Name)
+            return ($Name -match '[\*\?\[\]]')
+          }
+          # endregion helpers
+
           $addStore = Convert-ToYesNo $env:ADD_STORE 'yes'
-          
+          $storeDir = "$env:GITHUB_WORKSPACE\StorePackages"
+
           if ($addStore -ne 'yes') {
             Write-Host "AddStore=$addStore, skipping Store packages download" -ForegroundColor Yellow
-            $storeDir = "$env:GITHUB_WORKSPACE\StorePackages"
             New-Item -ItemType Directory -Force -Path $storeDir | Out-Null
             echo "STORE_PACKAGES_DIR=$storeDir" >> $env:GITHUB_ENV
             exit 0
           }
-          
+
           $ErrorActionPreference = 'Stop'
-          $storeDir = "$env:GITHUB_WORKSPACE\StorePackages"
-          
+          New-Item -ItemType Directory -Force -Path $storeDir | Out-Null
+
           Write-Host "=== Downloading Microsoft Store Packages ===" -ForegroundColor Cyan
           Write-Host "From: https://github.com/namnguyen97x/LTSC-Add-Microsoft-Store"
-          
-          # Create Store packages directory
-          New-Item -ItemType Directory -Force -Path $storeDir | Out-Null
-          
-          # Store package files to download from namnguyen97x/LTSC-Add-Microsoft-Store repository
-          # Based on repository: https://github.com/namnguyen97x/LTSC-Add-Microsoft-Store
-          # Required packages for Store to work
-          $storeFilesRequired = @(
+
+          # Required packages for Store to work (exact filenames are fine)
+          $required = @(
             'Microsoft.NET.Native.Framework.2.2_2.2.29512.0_x64__8wekyb3d8bbwe.Appx',
             'Microsoft.NET.Native.Framework.2.2_2.2.29512.0_x86__8wekyb3d8bbwe.Appx',
             'Microsoft.NET.Native.Runtime.2.2_2.2.28604.0_x64__8wekyb3d8bbwe.Appx',
@@ -171,152 +205,97 @@ jobs:
             'Microsoft.VCLibs.140.00.UWPDesktop_14.0.33728.0_x86__8wekyb3d8bbwe.Appx',
             'Microsoft.VCLibs.140.00_14.0.33519.0_x64__8wekyb3d8bbwe.Appx',
             'Microsoft.VCLibs.140.00_14.0.33519.0_x86__8wekyb3d8bbwe.Appx',
+            # dynamic bundles (pattern -> will be resolved)
             'Microsoft.WindowsStore_*_neutral___8wekyb3d8bbwe.Msixbundle',
             'Microsoft.DesktopAppInstaller_*_neutral___8wekyb3d8bbwe.Msixbundle'
           )
-          
-          # Optional packages (will not fail if not found)
-          $storeFilesOptional = @(
-            'Microsoft.StorePurchaseApp_22212.1401.6.0_neutral___8wekyb3d8bbwe.AppxBundle',
-            'Microsoft.XboxIdentityProvider_12.115.1001.0_neutral___8wekyb3d8bbwe.AppxBundle'
+
+          $optional = @(
+            'Microsoft.StorePurchaseApp_*_neutral___8wekyb3d8bbwe.AppxBundle',
+            'Microsoft.XboxIdentityProvider_*_neutral___8wekyb3d8bbwe.AppxBundle'
           )
-          
-          $storeFiles = $storeFilesRequired + $storeFilesOptional
-          
+
           $baseUrl = 'https://github.com/namnguyen97x/LTSC-Add-Microsoft-Store/raw/master/'
 
-          # Resolve actual filenames for versioned bundles via GitHub API (avoid hardcoding versions)
-          $repoApi = 'https://api.github.com/repos/namnguyen97x/LTSC-Add-Microsoft-Store/contents'
-          $repoFiles = @()
-          try {
-            $headers = @{ 'User-Agent' = 'tiny-auto-builder' }
-            if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)" }
-            $repoResponse = Invoke-WebRequest -Uri $repoApi -UseBasicParsing -Headers $headers
-            if ($repoResponse.StatusCode -eq 200) {
-              $repoFiles = ($repoResponse.Content | ConvertFrom-Json) | Where-Object { $_.type -eq 'file' } | Select-Object -ExpandProperty name
-            }
-          } catch {
-            Write-Host 'Warning: Failed to query GitHub API for file list. Falling back to static names.' -ForegroundColor Yellow
-          }
-
-          function Resolve-RepoFileName {
-            param(
-              [string]$pattern
-            )
-            if (-not $repoFiles -or $repoFiles.Count -eq 0) { return $pattern }
-            # Broad match for versioned bundles
-            if ($pattern -like 'Microsoft.WindowsStore*Msixbundle') {
-              $candidates = $repoFiles | Where-Object { $_ -like 'Microsoft.WindowsStore*Msixbundle' }
-              $match = $candidates | Sort-Object -Descending | Select-Object -First 1
-              if ($match) { return $match }
-            }
-            if ($pattern -like 'Microsoft.DesktopAppInstaller*Msixbundle') {
-              $candidates = $repoFiles | Where-Object { $_ -like 'Microsoft.DesktopAppInstaller*Msixbundle' }
-              $match = $candidates | Sort-Object -Descending | Select-Object -First 1
-              if ($match) { return $match }
-            }
-            # Fallback regex
-            $regex = '^' + [Regex]::Escape($pattern).Replace('\*', '.*').Replace('\?', '.') + '$'
-            $match = $repoFiles | Where-Object { $_ -match $regex } | Sort-Object -Descending | Select-Object -First 1
-            if ($match) { return $match } else { return $pattern }
-          }
-
-          # Resolve dynamic bundle names for Store and App Installer
-          $storeFilesRequired = $storeFilesRequired | ForEach-Object {
-            if ($_ -like 'Microsoft.WindowsStore_*_neutral___8wekyb3d8bbwe.Msixbundle') { return (Resolve-RepoFileName $_) }
-            if ($_ -like 'Microsoft.DesktopAppInstaller_*_neutral___8wekyb3d8bbwe.Msixbundle') { return (Resolve-RepoFileName $_) }
-            return $_
-          }
-
-          function Ensure-ConcreteFileName {
-            param([string]$name)
-            if ($name -notlike '*`*' -and $name -notlike '*?*' -and $name -notlike '*[*' -and $name -notlike '*]*') { return $name }
-            return (Resolve-RepoFileName $name)
-          }
-          
-          # Check if aria2c is available
+          # Ensure aria2c
           $aria2 = Get-Command aria2c -ErrorAction SilentlyContinue
           if (-not $aria2) {
-            $chocoAria2 = "C:\ProgramData\choco\bin\aria2c.exe"
+            $chocoAria2 = 'C:\\ProgramData\\choco\\bin\\aria2c.exe'
             if (Test-Path $chocoAria2) {
-              $env:Path = "C:\ProgramData\choco\bin;$env:Path"
+              $env:Path = "C:\\ProgramData\\choco\\bin;$env:Path"
               $aria2 = Get-Command aria2c -ErrorAction SilentlyContinue
             }
-            
             if (-not $aria2) {
-              Write-Host "Installing aria2c via Chocolatey..."
+              Write-Host 'Installing aria2 via Chocolatey...'
               choco install aria2 -y --no-progress | Out-Host
+              $aria2 = Get-Command aria2c -ErrorAction SilentlyContinue
             }
           }
-          
+
           $failedRequired = @()
           $failedOptional = @()
-          
-          # Download required packages first
-          foreach ($file in $storeFilesRequired) {
-            $resolved = Ensure-ConcreteFileName $file
-            $filePath = Join-Path $storeDir $resolved
-            $fileUrl = $baseUrl + $resolved
-            
-            if (Test-Path $filePath) {
-              Write-Host "✓ $file already exists, skipping..." -ForegroundColor Green
-              continue
-            }
-            
-            Write-Host "Downloading (required): $resolved"
-            try {
-              if ($aria2) {
-                & aria2c --max-connection-per-server=8 --split=8 --dir=$storeDir --out=$resolved $fileUrl | Out-Host
-              } else {
-                Invoke-WebRequest -Uri $fileUrl -OutFile $filePath -UseBasicParsing
-              }
-              
-              if (Test-Path $filePath) {
-                $sizeMB = (Get-Item $filePath).Length / 1MB
-                Write-Host "  ✓ Downloaded: $([math]::Round($sizeMB, 2)) MB" -ForegroundColor Green
-              } else {
-                Write-Warning "  ✗ Failed to download: $resolved"
-                $failedRequired += $resolved
-              }
-            } catch {
-              Write-Warning "  ✗ Error downloading $resolved : $_"
-              $failedRequired += $resolved
+
+          function Invoke-Download {
+            param([string]$Url,[string]$OutFile)
+            if ($aria2) {
+              & aria2c --max-connection-per-server=8 --split=8 --dir=$storeDir --out=$OutFile $Url | Out-Host
+            } else {
+              Invoke-WebRequest -Uri $Url -OutFile (Join-Path $storeDir $OutFile) -UseBasicParsing -Headers (New-HttpHeaders)
             }
           }
-          
-          # Download optional packages (non-fatal if failed)
-          foreach ($file in $storeFilesOptional) {
-            $resolved = Ensure-ConcreteFileName $file
-            $filePath = Join-Path $storeDir $resolved
-            $fileUrl = $baseUrl + $resolved
-            
-            if (Test-Path $filePath) {
-              Write-Host "✓ $file already exists, skipping..." -ForegroundColor Green
-              continue
-            }
-            
-            Write-Host "Downloading (optional): $resolved"
+
+          function Resolve-DynamicName {
+            param([string]$Pattern)
+            # 1) Try repo root contents
+            $name = Resolve-RepoFileName -Pattern $Pattern
+            if ($name) { return $name }
+            # 2) Try Releases assets of the same repo (WindowsStore/AppInstaller)
             try {
-              if ($aria2) {
-                & aria2c --max-connection-per-server=8 --split=8 --dir=$storeDir --out=$resolved $fileUrl 2>&1 | Out-Host
-              } else {
-                Invoke-WebRequest -Uri $fileUrl -OutFile $filePath -UseBasicParsing -ErrorAction SilentlyContinue
+              $rel = Invoke-WebRequest -Uri 'https://api.github.com/repos/namnguyen97x/LTSC-Add-Microsoft-Store/releases' -UseBasicParsing -Headers (New-HttpHeaders) -ErrorAction Stop
+              $releases = $rel.Content | ConvertFrom-Json
+              if ($releases) {
+                $assets = @(); foreach ($r in ($releases | Select-Object -First 8)) { if ($r.assets) { $assets += $r.assets } }
+                $candidate = Resolve-FromList -Pattern $Pattern -List ($assets.name)
+                if ($candidate) { return $candidate }
               }
-              
-              if (Test-Path $filePath) {
-                $sizeMB = (Get-Item $filePath).Length / 1MB
-                Write-Host "  ✓ Downloaded: $([math]::Round($sizeMB, 2)) MB" -ForegroundColor Green
-              } else {
-                Write-Host "  ⚠ Optional package not found: $resolved (will continue without it)" -ForegroundColor Yellow
-                $failedOptional += $resolved
+            } catch { }
+            return $null
+          }
+
+          # Download function that guarantees no wildcard is sent
+          function Get-File {
+            param([string]$Name,[switch]$Optional)
+            $targetName = $Name
+            if (Has-Wildcard $Name) {
+              $resolved = Resolve-DynamicName -Pattern $Name
+              if ($resolved) { $targetName = $resolved }
+              else {
+                if ($Optional) { $script:failedOptional += $Name; Write-Host "  ⚠ Optional package not found by pattern: $Name" -ForegroundColor Yellow; return }
+                $script:failedRequired += $Name; Write-Warning "  ✗ Required package unresolved: $Name"; return
               }
+            }
+
+            $dest = Join-Path $storeDir $targetName
+            if (Test-Path $dest) { Write-Host "✓ $targetName already exists, skipping..." -ForegroundColor Green; return }
+            $url = $baseUrl + $targetName
+            Write-Host "Downloading: $targetName"
+            try {
+              Invoke-Download -Url $url -OutFile $targetName
+              if (-not (Test-Path $dest)) { throw "File missing after download" }
+              $sizeMB = [math]::Round((Get-Item $dest).Length/1MB,2)
+              Write-Host "  ✓ Downloaded: $sizeMB MB" -ForegroundColor Green
             } catch {
-              Write-Host "  ⚠ Optional package download failed: $resolved (will continue without it)" -ForegroundColor Yellow
-              $failedOptional += $resolved
+              if ($Optional) { Write-Host "  ⚠ Optional package download failed: $targetName" -ForegroundColor Yellow; $script:failedOptional += $targetName }
+              else { Write-Warning "  ✗ Failed to download required: $targetName"; $script:failedRequired += $targetName }
             }
           }
-          
-          # Check if any required packages failed - try local repo fallback before failing
+
+          # Prefer cloning repository and copying files locally to avoid per-file download failures
+          # Skip direct downloads and mark all required as pending for clone/zip fallback
+          $failedRequired = $required
+          $failedOptional = @()
+
+          # Fallbacks for unresolved/failed required bundles
           if ($failedRequired.Count -gt 0) {
             Write-Host "Some required packages failed to download, attempting local repo fallback..." -ForegroundColor Yellow
 
@@ -331,138 +310,91 @@ jobs:
               Write-Host "Cloning repository: $repoUrl"
               git clone --depth=1 $repoUrl $repoDir | Out-Host
               if (Test-Path (Join-Path $repoDir '.git')) { $cloned = $true }
-            } catch {
-              Write-Host "git not available or clone failed: $_" -ForegroundColor Yellow
-            }
+            } catch { Write-Host "git not available or clone failed: $_" -ForegroundColor Yellow }
 
             if (-not $cloned) {
-              Write-Host "Falling back to zip download..." -ForegroundColor Yellow
+              Write-Host 'Falling back to zip download...' -ForegroundColor Yellow
               $zipUrl = 'https://codeload.github.com/namnguyen97x/LTSC-Add-Microsoft-Store/zip/refs/heads/master'
               $zipPath = Join-Path $env:RUNNER_TEMP 'store.zip'
-              Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+              Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -Headers (New-HttpHeaders)
               Expand-Archive -Path $zipPath -DestinationPath $repoDir -Force
               $expanded = Get-ChildItem -Path $repoDir | Where-Object { $_.PSIsContainer } | Select-Object -First 1
               if ($expanded) { $repoDir = $expanded.FullName }
             }
 
-            # Map failed required names to search patterns
-            $searchPatterns = @()
-            foreach ($name in $failedRequired) {
-              if ($name -like 'Microsoft.WindowsStore*') { $searchPatterns += 'Microsoft.WindowsStore*_neutral___8wekyb3d8bbwe.Msixbundle'; continue }
-              if ($name -like 'Microsoft.DesktopAppInstaller*') { $searchPatterns += 'Microsoft.DesktopAppInstaller*_neutral___8wekyb3d8bbwe.Msixbundle'; continue }
-              $searchPatterns += $name
-            }
-
             $stillMissing = @()
-            foreach ($pat in $searchPatterns) {
-              $matches = Get-ChildItem -Path $repoDir -Recurse -Include $pat -ErrorAction SilentlyContinue
-              if ($matches -and $matches.Count -gt 0) {
-                $pick = $matches | Sort-Object Name -Descending | Select-Object -First 1
+            foreach ($name in $failedRequired) {
+              $pattern = if ($name -like 'Microsoft.WindowsStore*') { 'Microsoft.WindowsStore*_neutral___8wekyb3d8bbwe.*bundle' }
+                         elseif ($name -like 'Microsoft.DesktopAppInstaller*') { 'Microsoft.DesktopAppInstaller*_8wekyb3d8bbwe.*bundle' }
+                         else { $name }
+              $m = Get-ChildItem -Path $repoDir -Recurse -Include $pattern -ErrorAction SilentlyContinue
+              if ($m) {
+                $pick = $m | Sort-Object Name -Descending | Select-Object -First 1
                 Copy-Item -Path $pick.FullName -Destination (Join-Path $storeDir $pick.Name) -Force
                 Write-Host "✓ Fallback copied: $($pick.Name)" -ForegroundColor Green
-              } else {
-                $stillMissing += $pat
-              }
+              } else { $stillMissing += $name }
             }
 
             if ($stillMissing.Count -gt 0) {
-              Write-Host "Required bundles still missing after clone/zip. Trying Releases assets..." -ForegroundColor Yellow
-
+              Write-Host 'Required bundles still missing after clone/zip. Trying Releases assets...' -ForegroundColor Yellow
               try {
-                $headers = @{ 'User-Agent' = 'tiny-auto-builder' }
-                if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)" }
                 $relUrl = 'https://api.github.com/repos/namnguyen97x/LTSC-Add-Microsoft-Store/releases'
-                $relResp = Invoke-WebRequest -Uri $relUrl -UseBasicParsing -Headers $headers -ErrorAction Stop
+                $relResp = Invoke-WebRequest -Uri $relUrl -UseBasicParsing -Headers (New-HttpHeaders) -ErrorAction Stop
                 $releases = $relResp.Content | ConvertFrom-Json
-                if ($releases -and $releases.Count -gt 0) {
-                  # Flatten all assets from recent releases (limit to first 5)
-                  $assets = @()
-                  foreach ($r in ($releases | Select-Object -First 5)) {
-                    if ($r.assets) { $assets += $r.assets }
-                  }
-                  foreach ($pat in @('Microsoft.WindowsStore*_neutral___8wekyb3d8bbwe.Msixbundle','Microsoft.DesktopAppInstaller*_neutral___8wekyb3d8bbwe.Msixbundle')) {
+                if ($releases) {
+                  $assets = @(); foreach ($r in ($releases | Select-Object -First 5)) { if ($r.assets) { $assets += $r.assets } }
+                  foreach ($pat in @('Microsoft.WindowsStore*_neutral___8wekyb3d8bbwe.*bundle','Microsoft.DesktopAppInstaller*_8wekyb3d8bbwe.*bundle')) {
                     $cand = $assets | Where-Object { $_.name -like $pat } | Sort-Object name -Descending | Select-Object -First 1
                     if ($cand -and $cand.browser_download_url) {
                       $outPath = Join-Path $storeDir $cand.name
                       Write-Host "Downloading from Releases: $($cand.name)" -ForegroundColor Cyan
-                      Invoke-WebRequest -Uri $cand.browser_download_url -OutFile $outPath -UseBasicParsing -Headers $headers
-                      if (Test-Path $outPath) {
-                        Write-Host "✓ Downloaded release asset: $($cand.name)" -ForegroundColor Green
-                        $stillMissing = $stillMissing | Where-Object { $_ -notlike $pat }
-                      }
+                      Invoke-WebRequest -Uri $cand.browser_download_url -OutFile $outPath -UseBasicParsing -Headers (New-HttpHeaders)
+                      if (Test-Path $outPath) { Write-Host "✓ Downloaded release asset: $($cand.name)" -ForegroundColor Green }
                     }
                   }
                 }
-              } catch {
-                Write-Host "Warning: Failed to download from Releases: $_" -ForegroundColor Yellow
-              }
+              } catch { Write-Host "Warning: Failed to download from Releases: $_" -ForegroundColor Yellow }
 
-              if ($stillMissing.Count -gt 0) {
-                Write-Host "Required bundles still missing after Releases. Trying alternate sources..." -ForegroundColor Yellow
-
-                # 1) Desktop App Installer from microsoft/winget-cli releases
-                try {
-                  $headers = @{ 'User-Agent' = 'tiny-auto-builder' }
-                  if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)" }
-                  $wingetUrl = 'https://api.github.com/repos/microsoft/winget-cli/releases'
-                  $wingetResp = Invoke-WebRequest -Uri $wingetUrl -UseBasicParsing -Headers $headers -ErrorAction Stop
-                  $wingetReleases = $wingetResp.Content | ConvertFrom-Json
-                  if ($wingetReleases -and $wingetReleases.Count -gt 0) {
-                    $wingetAssets = @()
-                    foreach ($r in ($wingetReleases | Select-Object -First 10)) {
-                      if ($r.assets) { $wingetAssets += $r.assets }
-                    }
-                    $appx = $wingetAssets | Where-Object { $_.name -like 'Microsoft.DesktopAppInstaller*_8wekyb3d8bbwe*.msixbundle' } | Sort-Object name -Descending | Select-Object -First 1
-                    if ($appx -and $appx.browser_download_url) {
-                      $outPath = Join-Path $storeDir $appx.name
-                      Write-Host "Downloading App Installer from winget-cli: $($appx.name)" -ForegroundColor Cyan
-                      Invoke-WebRequest -Uri $appx.browser_download_url -OutFile $outPath -UseBasicParsing -Headers $headers
-                      if (Test-Path $outPath) {
-                        Write-Host "✓ Downloaded App Installer from winget-cli" -ForegroundColor Green
-                        $stillMissing = $stillMissing | Where-Object { $_ -notlike 'Microsoft.DesktopAppInstaller*' }
-                      }
-                    }
+              # Alternate sources
+              Write-Host 'Trying alternate sources...' -ForegroundColor Yellow
+              # 1) Desktop App Installer from winget-cli
+              try {
+                $wingetResp = Invoke-WebRequest -Uri 'https://api.github.com/repos/microsoft/winget-cli/releases' -UseBasicParsing -Headers (New-HttpHeaders) -ErrorAction Stop
+                $wingetRel = $wingetResp.Content | ConvertFrom-Json
+                if ($wingetRel) {
+                  $wingetAssets = @(); foreach ($r in ($wingetRel | Select-Object -First 12)) { if ($r.assets) { $wingetAssets += $r.assets } }
+                  $appx = $wingetAssets | Where-Object { $_.name -like 'Microsoft.DesktopAppInstaller*_8wekyb3d8bbwe*.msixbundle' } | Sort-Object name -Descending | Select-Object -First 1
+                  if ($appx) {
+                    $outPath = Join-Path $storeDir $appx.name
+                    Write-Host "Downloading App Installer from winget-cli: $($appx.name)" -ForegroundColor Cyan
+                    Invoke-WebRequest -Uri $appx.browser_download_url -OutFile $outPath -UseBasicParsing -Headers (New-HttpHeaders)
+                    Write-Host '✓ Downloaded App Installer from winget-cli' -ForegroundColor Green
                   }
-                } catch {
-                  Write-Host "Warning: winget-cli fallback failed: $_" -ForegroundColor Yellow
                 }
+              } catch { Write-Host "Warning: winget-cli fallback failed: $_" -ForegroundColor Yellow }
 
-                # 2) Windows Store bundle from kkkgo/LTSC-Add-MicrosoftStore
-                try {
-                  $kkRepo = 'https://api.github.com/repos/kkkgo/LTSC-Add-MicrosoftStore/contents'
-                  $kkHeaders = @{ 'User-Agent' = 'tiny-auto-builder' }
-                  $kkResp = Invoke-WebRequest -Uri $kkRepo -UseBasicParsing -Headers $kkHeaders -ErrorAction Stop
-                  $kkFiles = $kkResp.Content | ConvertFrom-Json
-                  $storeFile = $kkFiles | Where-Object { $_.type -eq 'file' -and ($_.name -like 'Microsoft.WindowsStore*appxbundle' -or $_.name -like 'Microsoft.WindowsStore*msixbundle') } | Sort-Object name -Descending | Select-Object -First 1
-                  if ($storeFile -and $storeFile.download_url) {
-                    $outPath = Join-Path $storeDir $storeFile.name
-                    Write-Host "Downloading Windows Store from kkkgo repo: $($storeFile.name)" -ForegroundColor Cyan
-                    Invoke-WebRequest -Uri $storeFile.download_url -OutFile $outPath -UseBasicParsing
-                    if (Test-Path $outPath) {
-                      Write-Host "✓ Downloaded Windows Store from kkkgo repo" -ForegroundColor Green
-                      $stillMissing = $stillMissing | Where-Object { $_ -notlike 'Microsoft.WindowsStore*' }
-                    }
-                  }
-                } catch {
-                  Write-Host "Warning: kkkgo Store fallback failed: $_" -ForegroundColor Yellow
+              # 2) Windows Store bundle from kkkgo repo
+              try {
+                $kk = Invoke-WebRequest -Uri 'https://api.github.com/repos/kkkgo/LTSC-Add-MicrosoftStore/contents' -UseBasicParsing -Headers @{ 'User-Agent' = 'tiny-auto-builder' } -ErrorAction Stop
+                $kkFiles = $kk.Content | ConvertFrom-Json
+                $storeFile = $kkFiles | Where-Object { $_.type -eq 'file' -and ($_.name -like 'Microsoft.WindowsStore*appxbundle' -or $_.name -like 'Microsoft.WindowsStore*msixbundle') } | Sort-Object name -Descending | Select-Object -First 1
+                if ($storeFile) {
+                  $outPath = Join-Path $storeDir $storeFile.name
+                  Write-Host "Downloading Windows Store from kkkgo repo: $($storeFile.name)" -ForegroundColor Cyan
+                  Invoke-WebRequest -Uri $storeFile.download_url -OutFile $outPath -UseBasicParsing
+                  Write-Host '✓ Downloaded Windows Store from kkkgo repo' -ForegroundColor Green
                 }
-
-                if ($stillMissing.Count -gt 0) {
-                  Write-Error "Failed to prepare required Store packages (after all fallbacks): $($stillMissing -join ', ')"
-                  exit 1
-                }
-              }
+              } catch { Write-Host "Warning: kkkgo Store fallback failed: $_" -ForegroundColor Yellow }
             }
           }
-          
-          # Warn about optional packages but don't fail
+
           if ($failedOptional.Count -gt 0) {
             Write-Host "⚠ Some optional packages were not found (Store will still work): $($failedOptional -join ', ')" -ForegroundColor Yellow
           }
-          
-          Write-Host "Store packages download completed!" -ForegroundColor Green
+
+          Write-Host 'Store packages download completed!' -ForegroundColor Green
           echo "STORE_PACKAGES_DIR=$storeDir" >> $env:GITHUB_ENV
-      
+
       - name: Cache Dependencies (ISO)
         uses: actions/cache@v4
         id: cache-iso
@@ -473,7 +405,7 @@ jobs:
           restore-keys: |
             ltsc-iso-cache-${{ runner.os }}-
         continue-on-error: true
-      
+
       - name: Download and Mount Windows LTSC ISO
         shell: pwsh
         id: download-iso
@@ -481,40 +413,37 @@ jobs:
           ISO_URL_INPUT: ${{ github.event.inputs.iso_url || inputs.iso_url || '' }}
         run: |
           $ErrorActionPreference = 'Stop'
-          
+
           # Default LTSC ISO URL (Windows 11 Enterprise LTSC 2024)
           $defaultIsoUrl = 'https://ia804505.us.archive.org/29/items/windows_11_enterprise_ltsc_2024/en-us_windows_11_enterprise_ltsc_2024_x64_dvd_965cfb00.iso'
-          
+
           $isoUrl = $env:ISO_URL_INPUT
           if (-not $isoUrl -or $isoUrl.Trim() -eq '') {
-            Write-Host "ISO URL not provided, using default LTSC ISO URL" -ForegroundColor Yellow
+            Write-Host 'ISO URL not provided, using default LTSC ISO URL' -ForegroundColor Yellow
             $isoUrl = $defaultIsoUrl
           }
-          
+
           Write-Host "Using ISO URL: $isoUrl" -ForegroundColor Cyan
-          
+
           $isoFilePath = "$env:RUNNER_TEMP\windows-ltsc.iso"
-          
+
           # Check if ISO already exists from cache
           if (Test-Path $isoFilePath) {
             $cachedSize = (Get-Item $isoFilePath).Length / 1GB
             Write-Host "✓ Using cached ISO file: $([math]::Round($cachedSize, 2)) GB" -ForegroundColor Green
           } else {
             Write-Host "Downloading Windows LTSC ISO from: $isoUrl"
-            
+
             $aria2 = Get-Command aria2c -ErrorAction SilentlyContinue
             if (-not $aria2) {
-              $chocoAria2 = "C:\ProgramData\choco\bin\aria2c.exe"
+              $chocoAria2 = 'C:\\ProgramData\\choco\\bin\\aria2c.exe'
               if (Test-Path $chocoAria2) {
-                $env:Path = "C:\ProgramData\choco\bin;$env:Path"
+                $env:Path = "C:\\ProgramData\\choco\\bin;$env:Path"
                 $aria2 = Get-Command aria2c -ErrorAction SilentlyContinue
               }
-              
-              if (-not $aria2) {
-                choco install aria2 -y --no-progress | Out-Host
-              }
+              if (-not $aria2) { choco install aria2 -y --no-progress | Out-Host }
             }
-            
+
             $aria2Args = @(
               '--max-connection-per-server=16',
               '--split=16',
@@ -531,33 +460,30 @@ jobs:
               "--out=$(Split-Path -Leaf $isoFilePath)",
               $isoUrl
             )
-            
-            Write-Host "Downloading with aria2c..."
+
+            Write-Host 'Downloading with aria2c...'
             & aria2c @aria2Args | Out-Host
-            
-            if (-not (Test-Path $isoFilePath)) {
-              throw "ISO file not found after download"
-            }
-            
+
+            if (-not (Test-Path $isoFilePath)) { throw 'ISO file not found after download' }
             $fileSize = (Get-Item $isoFilePath).Length / 1GB
             Write-Host "✓ ISO downloaded: $([math]::Round($fileSize, 2)) GB" -ForegroundColor Green
           }
-          
+
           Write-Host "Mounting ISO file: $isoFilePath"
           $mountResult = Mount-DiskImage -ImagePath $isoFilePath -PassThru -ErrorAction Stop
           $volume = $mountResult | Get-Volume
           $isoDriveLetter = $volume.DriveLetter
-          
+
           if ($isoDriveLetter) {
-            $isoDrive = "$isoDriveLetter`:"
+            $isoDrive = "$isoDriveLetter:"
             Write-Host "✓ ISO mounted to: $isoDrive" -ForegroundColor Green
             echo "ISO_DRIVE=$isoDrive" >> $env:GITHUB_ENV
             echo "ISO_FILE_PATH=$isoFilePath" >> $env:GITHUB_ENV
           } else {
-            Write-Error "Failed to get drive letter from mounted ISO"
+            Write-Error 'Failed to get drive letter from mounted ISO'
             exit 1
           }
-      
+
       - name: Build LTSC ISO with Store
         shell: pwsh
         id: build
@@ -572,93 +498,65 @@ jobs:
         run: |
           $ErrorActionPreference = 'Continue'
           $buildStartTime = Get-Date
-          
+
           function Get-PerformanceMetrics {
             $memInfo = Get-CimInstance Win32_OperatingSystem
             $cpu = Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction SilentlyContinue
             $freeMemGB = [math]::Round($memInfo.FreePhysicalMemory / 1MB, 2)
-            $cpuPercent = if ($cpu) { [math]::Round($cpu.CounterSamples[0].CookedValue, 1) } else { "N/A" }
-            return @{
-              FreeMemoryGB = $freeMemGB
-              CPUPercent = $cpuPercent
-            }
+            $cpuPercent = if ($cpu) { [math]::Round($cpu.CounterSamples[0].CookedValue, 1) } else { 'N/A' }
+            return @{ FreeMemoryGB = $freeMemGB; CPUPercent = $cpuPercent }
           }
-          
+
           $isoDrive = $env:ISO_DRIVE
-          if (-not $isoDrive) {
-            Write-Error "ISO drive not set"
-            exit 1
-          }
-          
-          $edition = $env:EDITION
-          $isoName = if ($env:ISO_NAME) { $env:ISO_NAME } else { 'ltsc-store.iso' }
-          
-          # Helper function to convert boolean/string to yes/no
+          if (-not $isoDrive) { Write-Error 'ISO drive not set'; exit 1 }
+
           function Convert-ToYesNo {
             param($value, $default = 'yes')
             if (-not $value) { return $default }
             $str = $value.ToString().ToLower()
-            if ($str -eq 'true' -or $str -eq '1' -or $str -eq 'yes') { return 'yes' }
+            if ($str -in @('true','1','yes','y')) { return 'yes' }
             return 'no'
           }
-          
-          # Convert environment variables to yes/no FIRST (before using them)
+
+          $edition = $env:EDITION
+          $isoName  = if ($env:ISO_NAME) { $env:ISO_NAME } else { 'ltsc-store.iso' }
           $addStore = Convert-ToYesNo $env:ADD_STORE 'yes'
           $removeDefender = Convert-ToYesNo $env:REMOVE_DEFENDER 'no'
           $removeEdge = Convert-ToYesNo $env:REMOVE_EDGE 'yes'
           $removeAI = Convert-ToYesNo $env:REMOVE_AI 'no'
           $addThorium = Convert-ToYesNo $env:ADD_THORIUM 'no'
-          
-          # Validate Store packages directory AFTER converting AddStore
+
           $storeDir = $env:STORE_PACKAGES_DIR
           if (-not $storeDir -or -not (Test-Path $storeDir)) {
-            # Store packages directory might not exist if AddStore=no, that's OK
-            if ($addStore -eq 'yes') {
-              Write-Error "Store packages directory not found (AddStore=yes but packages not downloaded)"
-              exit 1
-            } else {
-              Write-Host "AddStore=no, Store packages directory not needed" -ForegroundColor Gray
-              $storeDir = ''  # Empty string means no Store packages
-            }
+            if ($addStore -eq 'yes') { Write-Error 'Store packages directory not found (AddStore=yes but packages not downloaded)'; exit 1 }
+            else { Write-Host 'AddStore=no, Store packages directory not needed' -ForegroundColor Gray; $storeDir = '' }
           }
-          
-          Write-Host "=== Build Configuration ===" -ForegroundColor Cyan
+
+          Write-Host '=== Build Configuration ===' -ForegroundColor Cyan
           Write-Host "ISO Drive: $isoDrive"
           Write-Host "Store Packages: $storeDir"
           Write-Host "Target Edition: $edition"
           Write-Host "ISO Name: $isoName"
           Write-Host "Debloat options: Defender=$removeDefender, AI=$removeAI, Edge=$removeEdge, AddStore=$addStore, Thorium=$addThorium" -ForegroundColor Cyan
-          
-          # Run the builder script
-          $scriptPath = Join-Path $env:GITHUB_WORKSPACE "ltsc-store-builder.ps1"
-          
+
+          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'ltsc-store-builder.ps1'
           if (-not (Test-Path $scriptPath)) {
             Write-Error "LTSC builder script not found at: $scriptPath"
-            Write-Host "Available files in workspace:" -ForegroundColor Yellow
-            Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter "*.ps1" | ForEach-Object { Write-Host "  - $($_.Name)" }
+            Write-Host 'Available files in workspace:' -ForegroundColor Yellow
+            Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter '*.ps1' | ForEach-Object { Write-Host "  - $($_.Name)" }
             exit 1
           }
-          
-          Write-Host "=== Starting Build Process ===" -ForegroundColor Cyan
+
+          Write-Host '=== Starting Build Process ===' -ForegroundColor Cyan
           $metricsBefore = Get-PerformanceMetrics
           Write-Host "System metrics before build: CPU=$($metricsBefore.CPUPercent)%, Free RAM=$($metricsBefore.FreeMemoryGB) GB"
-          
+
           try {
-            # Run script and capture output
             $scriptOutput = & pwsh -File $scriptPath -DriveLetter $isoDrive -StorePackagesDir $storeDir -Edition $edition -IsoName $isoName -AddStore $addStore -RemoveDefender $removeDefender -RemoveEdge $removeEdge -RemoveAI $removeAI -AddThorium $addThorium -IrstDriverPath '' 2>&1
-            
-            # Process output and extract ISO path
             foreach ($line in $scriptOutput) {
               Write-Host $line
-              
-              # Extract ISO_PATH from script output
-              if ($line -match '^ISO_PATH=(.+)$') {
-                $env:ISO_PATH = $Matches[1]
-              }
-              if ($line -match '^ISO_NAME=(.+)$') {
-                $env:ISO_NAME = $Matches[1]
-              }
-              
+              if ($line -match '^ISO_PATH=(.+)$') { $env:ISO_PATH = $Matches[1] }
+              if ($line -match '^ISO_NAME=(.+)$') { $env:ISO_NAME = $Matches[1] }
               $now = Get-Date
               if (-not $script:lastMetricsTime -or ($now - $script:lastMetricsTime).TotalMinutes -ge 2) {
                 $metrics = Get-PerformanceMetrics
@@ -667,35 +565,21 @@ jobs:
                 $script:lastMetricsTime = $now
               }
             }
-            
-            if ($LASTEXITCODE -ne 0) {
-              Write-Warning "Script exited with code $LASTEXITCODE"
-            }
-          } catch {
-            Write-Error "Error running script: $_"
-            exit 1
-          }
-          
-          # Use ISO path from script output or construct from IsoName
-          if (-not $env:ISO_PATH) {
-            $env:ISO_PATH = Join-Path $env:GITHUB_WORKSPACE $isoName
-          }
-          
-          if (-not (Test-Path $env:ISO_PATH)) {
-            Write-Error "ISO was not created at expected path: $env:ISO_PATH"
-            exit 1
-          }
-          
+            if ($LASTEXITCODE -ne 0) { Write-Warning "Script exited with code $LASTEXITCODE" }
+          } catch { Write-Error "Error running script: $_"; exit 1 }
+
+          if (-not $env:ISO_PATH) { $env:ISO_PATH = Join-Path $env:GITHUB_WORKSPACE $isoName }
+          if (-not (Test-Path $env:ISO_PATH)) { Write-Error "ISO was not created at expected path: $env:ISO_PATH"; exit 1 }
+
           Write-Host "✓ ISO confirmed at: $env:ISO_PATH" -ForegroundColor Green
           echo "ISO_PATH=$env:ISO_PATH" >> $env:GITHUB_ENV
-          
+
           $buildTime = (Get-Date) - $buildStartTime
           $metricsAfter = Get-PerformanceMetrics
-          
-          Write-Host "=== Build Summary ===" -ForegroundColor Cyan
+          Write-Host '=== Build Summary ===' -ForegroundColor Cyan
           Write-Host "Build time: $([math]::Round($buildTime.TotalMinutes, 2)) minutes"
           Write-Host "System metrics after build: CPU=$($metricsAfter.CPUPercent)%, Free RAM=$($metricsAfter.FreeMemoryGB) GB"
-      
+
       - name: Upload ISO Artifact
         if: success()
         uses: actions/upload-artifact@v4
@@ -703,29 +587,17 @@ jobs:
           name: ltsc-store-iso
           path: ${{ env.ISO_PATH }}
           retention-days: 30
-      
+
       - name: Post-job Cleanup
         if: always()
         shell: pwsh
         run: |
-          Write-Host "Post job cleanup..."
-          
-          # Restore Windows Search service if stopped
-          try {
-            Start-Service -Name "WSearch" -ErrorAction SilentlyContinue | Out-Null
-            Write-Host "✓ Windows Search service restored" -ForegroundColor Green
-          } catch {
-            Write-Host "  Info: Windows Search service restore skipped" -ForegroundColor Yellow
-          }
-          
-          # Unmount ISO
+          Write-Host 'Post job cleanup...'
+          try { Start-Service -Name 'WSearch' -ErrorAction SilentlyContinue | Out-Null; Write-Host '✓ Windows Search service restored' -ForegroundColor Green } catch { Write-Host '  Info: Windows Search service restore skipped' -ForegroundColor Yellow }
           if ($env:ISO_FILE_PATH) {
             Write-Host "Unmounting ISO: $env:ISO_FILE_PATH"
             try {
               Get-DiskImage | Where-Object { $_.ImagePath -eq $env:ISO_FILE_PATH } | Dismount-DiskImage -ErrorAction Stop
-              Write-Host "✓ ISO unmounted successfully" -ForegroundColor Green
-            } catch {
-              Write-Warning "Failed to unmount ISO: $_"
-            }
+              Write-Host '✓ ISO unmounted successfully' -ForegroundColor Green
+            } catch { Write-Warning "Failed to unmount ISO: $_" }
           }
-
