@@ -189,7 +189,9 @@ jobs:
           $repoApi = 'https://api.github.com/repos/namnguyen97x/LTSC-Add-Microsoft-Store/contents'
           $repoFiles = @()
           try {
-            $repoResponse = Invoke-WebRequest -Uri $repoApi -UseBasicParsing -Headers @{ 'User-Agent' = 'tiny-auto-builder' }
+            $headers = @{ 'User-Agent' = 'tiny-auto-builder' }
+            if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)" }
+            $repoResponse = Invoke-WebRequest -Uri $repoApi -UseBasicParsing -Headers $headers
             if ($repoResponse.StatusCode -eq 200) {
               $repoFiles = ($repoResponse.Content | ConvertFrom-Json) | Where-Object { $_.type -eq 'file' } | Select-Object -ExpandProperty name
             }
@@ -202,7 +204,18 @@ jobs:
               [string]$pattern
             )
             if (-not $repoFiles -or $repoFiles.Count -eq 0) { return $pattern }
-            # Translate PowerShell wildcard to regex
+            # Broad match for versioned bundles
+            if ($pattern -like 'Microsoft.WindowsStore*Msixbundle') {
+              $candidates = $repoFiles | Where-Object { $_ -like 'Microsoft.WindowsStore*Msixbundle' }
+              $match = $candidates | Sort-Object -Descending | Select-Object -First 1
+              if ($match) { return $match }
+            }
+            if ($pattern -like 'Microsoft.DesktopAppInstaller*Msixbundle') {
+              $candidates = $repoFiles | Where-Object { $_ -like 'Microsoft.DesktopAppInstaller*Msixbundle' }
+              $match = $candidates | Sort-Object -Descending | Select-Object -First 1
+              if ($match) { return $match }
+            }
+            # Fallback regex
             $regex = '^' + [Regex]::Escape($pattern).Replace('\*', '.*').Replace('\?', '.') + '$'
             $match = $repoFiles | Where-Object { $_ -match $regex } | Sort-Object -Descending | Select-Object -First 1
             if ($match) { return $match } else { return $pattern }
@@ -213,6 +226,12 @@ jobs:
             if ($_ -like 'Microsoft.WindowsStore_*_neutral___8wekyb3d8bbwe.Msixbundle') { return (Resolve-RepoFileName $_) }
             if ($_ -like 'Microsoft.DesktopAppInstaller_*_neutral___8wekyb3d8bbwe.Msixbundle') { return (Resolve-RepoFileName $_) }
             return $_
+          }
+
+          function Ensure-ConcreteFileName {
+            param([string]$name)
+            if ($name -notlike '*`*' -and $name -notlike '*?*' -and $name -notlike '*[*' -and $name -notlike '*]*') { return $name }
+            return (Resolve-RepoFileName $name)
           }
           
           # Check if aria2c is available
@@ -235,18 +254,19 @@ jobs:
           
           # Download required packages first
           foreach ($file in $storeFilesRequired) {
-            $filePath = Join-Path $storeDir $file
-            $fileUrl = $baseUrl + $file
+            $resolved = Ensure-ConcreteFileName $file
+            $filePath = Join-Path $storeDir $resolved
+            $fileUrl = $baseUrl + $resolved
             
             if (Test-Path $filePath) {
               Write-Host "✓ $file already exists, skipping..." -ForegroundColor Green
               continue
             }
             
-            Write-Host "Downloading (required): $file"
+            Write-Host "Downloading (required): $resolved"
             try {
               if ($aria2) {
-                & aria2c --max-connection-per-server=8 --split=8 --dir=$storeDir --out=$file $fileUrl | Out-Host
+                & aria2c --max-connection-per-server=8 --split=8 --dir=$storeDir --out=$resolved $fileUrl | Out-Host
               } else {
                 Invoke-WebRequest -Uri $fileUrl -OutFile $filePath -UseBasicParsing
               }
@@ -255,29 +275,30 @@ jobs:
                 $sizeMB = (Get-Item $filePath).Length / 1MB
                 Write-Host "  ✓ Downloaded: $([math]::Round($sizeMB, 2)) MB" -ForegroundColor Green
               } else {
-                Write-Warning "  ✗ Failed to download: $file"
-                $failedRequired += $file
+                Write-Warning "  ✗ Failed to download: $resolved"
+                $failedRequired += $resolved
               }
             } catch {
-              Write-Warning "  ✗ Error downloading $file : $_"
-              $failedRequired += $file
+              Write-Warning "  ✗ Error downloading $resolved : $_"
+              $failedRequired += $resolved
             }
           }
           
           # Download optional packages (non-fatal if failed)
           foreach ($file in $storeFilesOptional) {
-            $filePath = Join-Path $storeDir $file
-            $fileUrl = $baseUrl + $file
+            $resolved = Ensure-ConcreteFileName $file
+            $filePath = Join-Path $storeDir $resolved
+            $fileUrl = $baseUrl + $resolved
             
             if (Test-Path $filePath) {
               Write-Host "✓ $file already exists, skipping..." -ForegroundColor Green
               continue
             }
             
-            Write-Host "Downloading (optional): $file"
+            Write-Host "Downloading (optional): $resolved"
             try {
               if ($aria2) {
-                & aria2c --max-connection-per-server=8 --split=8 --dir=$storeDir --out=$file $fileUrl 2>&1 | Out-Host
+                & aria2c --max-connection-per-server=8 --split=8 --dir=$storeDir --out=$resolved $fileUrl 2>&1 | Out-Host
               } else {
                 Invoke-WebRequest -Uri $fileUrl -OutFile $filePath -UseBasicParsing -ErrorAction SilentlyContinue
               }
@@ -286,12 +307,12 @@ jobs:
                 $sizeMB = (Get-Item $filePath).Length / 1MB
                 Write-Host "  ✓ Downloaded: $([math]::Round($sizeMB, 2)) MB" -ForegroundColor Green
               } else {
-                Write-Host "  ⚠ Optional package not found: $file (will continue without it)" -ForegroundColor Yellow
-                $failedOptional += $file
+                Write-Host "  ⚠ Optional package not found: $resolved (will continue without it)" -ForegroundColor Yellow
+                $failedOptional += $resolved
               }
             } catch {
-              Write-Host "  ⚠ Optional package download failed: $file (will continue without it)" -ForegroundColor Yellow
-              $failedOptional += $file
+              Write-Host "  ⚠ Optional package download failed: $resolved (will continue without it)" -ForegroundColor Yellow
+              $failedOptional += $resolved
             }
           }
           
