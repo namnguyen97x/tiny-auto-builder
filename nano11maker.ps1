@@ -27,7 +27,10 @@ param (
     
     # IRST driver path (optional, path to folder containing IRST driver .inf files)
     # If not provided, will use IRST_Driver folder in project root
-    [string]$IrstDriverPath = ''
+    [string]$IrstDriverPath = '',
+    
+    # Add Thorium browser to the image
+    [ValidateSet('yes','no')][string]$AddThorium = 'no'
 )
 
 # Set error handling to continue on non-critical errors
@@ -1262,3 +1265,50 @@ Remove-Item -Path "$mainOSDrive\nano11" -Recurse -Force -ErrorAction SilentlyCon
 Remove-Item -Path "$mainOSDrive\scratchdir" -Recurse -Force -ErrorAction SilentlyContinue
 Stop-Transcript
 exit
+
+# Add Thorium browser (optional)
+if ($AddThorium -eq 'yes') {
+    Write-Host "=== Adding Thorium Browser ===" -ForegroundColor Cyan
+    function Add-ThoriumBrowser {
+        param([string]$MountPath)
+        $tempDir = "$env:TEMP\ThoriumDownload"
+        $thoriumDir = "$MountPath\Program Files\Thorium"
+        try {
+            if (Test-Path $tempDir) { Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+            New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+            $apiUrl = "https://api.github.com/repos/Alex313031/Thorium-Win/releases/latest"
+            $release = Invoke-RestMethod -Uri $apiUrl -ErrorAction Stop
+            $asset = $release.assets | Where-Object { $_.name -like '*win64*' -and ($_.name -like '*.zip' -or $_.name -like '*.7z') } | Select-Object -First 1
+            if (-not $asset) { $asset = $release.assets | Where-Object { $_.name -like '*.zip' -or $_.name -like '*.7z' } | Select-Object -First 1 }
+            if (-not $asset) { Write-Warning "No suitable Thorium asset found"; return $false }
+            $downloadPath = Join-Path $tempDir $asset.name
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $downloadPath -UseBasicParsing
+            if ($asset.name -like '*.zip') {
+                Expand-Archive -Path $downloadPath -DestinationPath $tempDir -Force
+            } elseif ($asset.name -like '*.7z') {
+                $seven = "C:\\Program Files\\7-Zip\\7z.exe"
+                if (-not (Test-Path $seven)) { Write-Warning "7-Zip not found; use a .zip release"; return $false }
+                & $seven x "$downloadPath" "-o$tempDir" -y | Out-Null
+            }
+            $extracted = (Get-ChildItem -Path $tempDir -Directory | Where-Object { $_.Name -like '*thorium*' -or $_.Name -like '*Thorium*' } | Select-Object -First 1)
+            if (-not $extracted) { $executable = Get-ChildItem -Path $tempDir -Filter 'thorium.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1; if ($executable) { $extracted = $executable.Directory } }
+            if (-not $extracted) { Write-Warning "Thorium extraction not found"; return $false }
+            if (Test-Path $thoriumDir) { Remove-Item -Path $thoriumDir -Recurse -Force -ErrorAction SilentlyContinue }
+            New-Item -ItemType Directory -Path $thoriumDir -Force | Out-Null
+            Copy-Item -Path "$($extracted.FullName)\*" -Destination $thoriumDir -Recurse -Force
+            if (-not (Test-Path "$thoriumDir\thorium.exe")) { Write-Warning "thorium.exe missing after copy"; return $false }
+            $startMenuPath = "$MountPath\ProgramData\Microsoft\Windows\Start Menu\Programs"
+            $startMenuPrograms = "$startMenuPath\Thorium"
+            if (-not (Test-Path $startMenuPrograms)) { New-Item -ItemType Directory -Path $startMenuPrograms -Force | Out-Null }
+            $wshShell = New-Object -ComObject WScript.Shell
+            $shortcut = $wshShell.CreateShortcut("$startMenuPrograms\Thorium Browser.lnk")
+            $shortcut.TargetPath = "C:\\Program Files\\Thorium\\thorium.exe"
+            $shortcut.WorkingDirectory = "C:\\Program Files\\Thorium"
+            $shortcut.Description = "Thorium Browser"
+            $shortcut.Save()
+            return $true
+        } catch { Write-Warning "Thorium install failed: $_"; return $false } finally { if (Test-Path $tempDir) { Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue } }
+    }
+    $ok = Add-ThoriumBrowser -MountPath $scratchDir
+    if ($ok) { Write-Host "✓ Thorium installed" -ForegroundColor Green } else { Write-Host "⚠ Thorium installation failed" -ForegroundColor Yellow }
+}
