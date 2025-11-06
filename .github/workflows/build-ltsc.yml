@@ -35,6 +35,11 @@ on:
         required: false
         default: 'no'
         type: string
+      add_thorium:
+        description: 'Add Thorium browser to replace Edge (default: yes, only if Edge is removed)'
+        required: false
+        default: 'yes'
+        type: string
       iso_name:
         description: 'Custom ISO filename (leave empty to use default: ltsc-store.iso)'
         required: false
@@ -73,6 +78,11 @@ on:
         description: 'Remove AI/Copilot (LTSC typically does not have official AI support)'
         required: false
         default: false
+        type: boolean
+      add_thorium:
+        description: 'Add Thorium browser to replace Edge (only if Edge is removed)'
+        required: false
+        default: true
         type: boolean
       iso_name:
         description: 'Custom ISO filename (leave empty to use default: ltsc-store.iso)'
@@ -319,6 +329,7 @@ jobs:
           REMOVE_DEFENDER: ${{ github.event.inputs.remove_defender || inputs.remove_defender || 'no' }}
           REMOVE_EDGE: ${{ github.event.inputs.remove_edge || inputs.remove_edge || 'yes' }}
           REMOVE_AI: ${{ github.event.inputs.remove_ai || inputs.remove_ai || 'no' }}
+          ADD_THORIUM: ${{ github.event.inputs.add_thorium || inputs.add_thorium || 'yes' }}
         run: |
           $ErrorActionPreference = 'Continue'
           $buildStartTime = Get-Date
@@ -357,6 +368,7 @@ jobs:
           $removeDefender = Convert-ToYesNo $env:REMOVE_DEFENDER 'no'
           $removeEdge = Convert-ToYesNo $env:REMOVE_EDGE 'yes'
           $removeAI = Convert-ToYesNo $env:REMOVE_AI 'no'
+          $addThorium = Convert-ToYesNo $env:ADD_THORIUM 'yes'
           
           # Validate Store packages directory AFTER converting AddStore
           $storeDir = $env:STORE_PACKAGES_DIR
@@ -376,7 +388,7 @@ jobs:
           Write-Host "Store Packages: $storeDir"
           Write-Host "Target Edition: $edition"
           Write-Host "ISO Name: $isoName"
-          Write-Host "Debloat options: Defender=$removeDefender, AI=$removeAI, Edge=$removeEdge, AddStore=$addStore" -ForegroundColor Cyan
+          Write-Host "Debloat options: Defender=$removeDefender, AI=$removeAI, Edge=$removeEdge, AddStore=$addStore, Thorium=$addThorium" -ForegroundColor Cyan
           
           # Run the builder script
           $scriptPath = Join-Path $env:GITHUB_WORKSPACE "ltsc-store-builder.ps1"
@@ -394,7 +406,7 @@ jobs:
           
           try {
             # Run script and capture output
-            $scriptOutput = & pwsh -File $scriptPath -DriveLetter $isoDrive -StorePackagesDir $storeDir -Edition $edition -IsoName $isoName -AddStore $addStore -RemoveDefender $removeDefender -RemoveEdge $removeEdge -RemoveAI $removeAI -IrstDriverPath '' 2>&1
+            $scriptOutput = & pwsh -File $scriptPath -DriveLetter $isoDrive -StorePackagesDir $storeDir -Edition $edition -IsoName $isoName -AddStore $addStore -RemoveDefender $removeDefender -RemoveEdge $removeEdge -RemoveAI $removeAI -AddThorium $addThorium -IrstDriverPath '' 2>&1
             
             # Process output and extract ISO path
             foreach ($line in $scriptOutput) {

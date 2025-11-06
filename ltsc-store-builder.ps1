@@ -32,7 +32,11 @@ param(
     
     # IRST driver path (optional, path to folder containing IRST driver .inf files)
     # If not provided, will use IRST_Driver folder in project root
-    [string]$IrstDriverPath = ''
+    [string]$IrstDriverPath = '',
+    
+    # Add Thorium browser to replace Edge (yes = add Thorium if Edge is removed, no = don't add)
+    [ValidateSet('yes','no')]
+    [string]$AddThorium = 'yes'
 )
 
 $ErrorActionPreference = 'Continue'
@@ -75,7 +79,12 @@ Write-Host "Drive Letter: $DriveLetter"
 Write-Host "Store Packages: $StorePackagesDir"
 Write-Host "Target Edition: $Edition"
 Write-Host "ISO Name: $IsoName"
-Write-Host "Debloat options: Defender=$RemoveDefender, AI=$RemoveAI, Edge=$RemoveEdge, Store=$RemoveStore, AddStore=$AddStore" -ForegroundColor Cyan
+Write-Host "Debloat options: Defender=$RemoveDefender, AI=$RemoveAI, Edge=$RemoveEdge, Store=$RemoveStore, AddStore=$AddStore, Thorium=$AddThorium" -ForegroundColor Cyan
+
+# Auto-enable Thorium if Edge is removed
+if ($RemoveEdge -eq 'yes' -and $AddThorium -eq 'yes') {
+    Write-Host "Edge will be removed, Thorium will be added as replacement browser" -ForegroundColor Yellow
+}
 
 # Validate inputs
 if (-not (Test-Path "$DriveLetter\sources\install.wim") -and -not (Test-Path "$DriveLetter\sources\install.esd")) {
@@ -750,6 +759,211 @@ if ($AddStore -eq 'yes' -and $StorePackagesDir -and (Test-Path $StorePackagesDir
     } else {
         Write-Host "AddStore=no, skipping Store installation" -ForegroundColor Gray
     }
+}
+
+# Add Thorium browser if Edge is removed
+if ($RemoveEdge -eq 'yes' -and $AddThorium -eq 'yes') {
+    Write-Host "=== Adding Thorium Browser ===" -ForegroundColor Cyan
+    Write-Host "Note: Adding Thorium will increase image size (~150-200MB)" -ForegroundColor Yellow
+    
+    # Function to download and inject Thorium
+    function Add-ThoriumBrowser {
+        param(
+            [string]$MountPath,
+            [string]$ScriptRoot
+        )
+        
+        $tempDir = "$env:TEMP\ThoriumDownload"
+        $thoriumDir = "$MountPath\Program Files\Thorium"
+        
+        try {
+            # Create temp directory
+            if (Test-Path $tempDir) {
+                Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+            
+            Write-Host "Downloading Thorium browser from GitHub..." -ForegroundColor Cyan
+            
+            # Get latest Thorium release from GitHub
+            $apiUrl = "https://api.github.com/repos/Alex313031/Thorium-Win/releases/latest"
+            try {
+                $release = Invoke-RestMethod -Uri $apiUrl -ErrorAction Stop
+                $asset = $release.assets | Where-Object { 
+                    $_.name -like '*Windows*' -and (
+                        $_.name -like '*x64*.zip' -or 
+                        $_.name -like '*x64*.7z' -or
+                        $_.name -like '*win64*.zip' -or
+                        $_.name -like '*win64*.7z'
+                    )
+                } | Select-Object -First 1
+                
+                if (-not $asset) {
+                    # Fallback: try to find any zip/7z file
+                    $asset = $release.assets | Where-Object { 
+                        $_.name -like '*.zip' -or $_.name -like '*.7z'
+                    } | Select-Object -First 1
+                }
+                
+                if ($asset) {
+                    Write-Host "Found release: $($release.tag_name)" -ForegroundColor Green
+                    Write-Host "Downloading: $($asset.name)..." -ForegroundColor Gray
+                    
+                    $downloadPath = Join-Path $tempDir $asset.name
+                    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $downloadPath -UseBasicParsing
+                    
+                    Write-Host "Extracting Thorium..." -ForegroundColor Cyan
+                    
+                    # Extract based on file type
+                    if ($asset.name -like '*.zip') {
+                        Expand-Archive -Path $downloadPath -DestinationPath $tempDir -Force
+                    } elseif ($asset.name -like '*.7z') {
+                        # Try 7-Zip if available (check multiple possible locations)
+                        $7zipPaths = @(
+                            "C:\Program Files\7-Zip\7z.exe",
+                            "C:\Program Files (x86)\7-Zip\7z.exe",
+                            "$env:ProgramFiles\7-Zip\7z.exe"
+                        )
+                        $7zipPath = $null
+                        foreach ($path in $7zipPaths) {
+                            if (Test-Path $path) {
+                                $7zipPath = $path
+                                break
+                            }
+                        }
+                        
+                        if ($7zipPath) {
+                            Write-Host "Using 7-Zip at: $7zipPath" -ForegroundColor Gray
+                            & $7zipPath x "$downloadPath" "-o$tempDir" -y | Out-Null
+                            if ($LASTEXITCODE -ne 0) {
+                                Write-Warning "7-Zip extraction failed (exit code: $LASTEXITCODE)"
+                                return $false
+                            }
+                        } else {
+                            Write-Warning "7-Zip not found. Cannot extract .7z file."
+                            Write-Warning "Please ensure 7-Zip is installed or use a .zip release"
+                            return $false
+                        }
+                    } else {
+                        Write-Warning "Unsupported archive format: $($asset.name)"
+                        return $false
+                    }
+                    
+                    # Find extracted Thorium folder
+                    $extractedDirs = Get-ChildItem -Path $tempDir -Directory | Where-Object {
+                        $_.Name -like '*Thorium*' -or $_.Name -like '*thorium*'
+                    }
+                    
+                    if ($extractedDirs.Count -eq 0) {
+                        # Might be extracted directly to tempDir
+                        $thoriumExe = Get-ChildItem -Path $tempDir -Filter "thorium.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                        if ($thoriumExe) {
+                            $extractedPath = $thoriumExe.Directory.FullName
+                        } else {
+                            Write-Warning "Could not find Thorium executable in extracted files"
+                            return $false
+                        }
+                    } else {
+                        $extractedPath = $extractedDirs[0].FullName
+                    }
+                    
+                    Write-Host "Copying Thorium to Program Files..." -ForegroundColor Cyan
+                    
+                    # Create Program Files\Thorium directory
+                    if (Test-Path $thoriumDir) {
+                        Remove-Item -Path $thoriumDir -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+                    New-Item -ItemType Directory -Path $thoriumDir -Force | Out-Null
+                    
+                    # Copy all files
+                    Copy-Item -Path "$extractedPath\*" -Destination $thoriumDir -Recurse -Force
+                    
+                    # Verify thorium.exe exists
+                    if (-not (Test-Path "$thoriumDir\thorium.exe")) {
+                        Write-Warning "thorium.exe not found after copy"
+                        return $false
+                    }
+                    
+                    Write-Host "Creating Start Menu shortcuts..." -ForegroundColor Cyan
+                    
+                    # Create Start Menu shortcuts
+                    $startMenuPath = "$MountPath\ProgramData\Microsoft\Windows\Start Menu\Programs"
+                    $startMenuPrograms = "$startMenuPath\Thorium"
+                    if (-not (Test-Path $startMenuPrograms)) {
+                        New-Item -ItemType Directory -Path $startMenuPrograms -Force | Out-Null
+                    }
+                    
+                    # Create shortcut using WScript (works in offline image)
+                    $shortcutPath = "$startMenuPrograms\Thorium Browser.lnk"
+                    $wshShell = New-Object -ComObject WScript.Shell
+                    $shortcut = $wshShell.CreateShortcut($shortcutPath)
+                    $shortcut.TargetPath = "C:\Program Files\Thorium\thorium.exe"
+                    $shortcut.WorkingDirectory = "C:\Program Files\Thorium"
+                    $shortcut.Description = "Thorium Browser - Fast Chromium-based browser"
+                    $shortcut.Save()
+                    
+                    # Also create in Default User Start Menu
+                    $defaultUserStartMenu = "$MountPath\Users\Default\AppData\Roaming\Microsoft\Windows\Start Menu\Programs"
+                    $defaultUserPrograms = "$defaultUserStartMenu\Thorium"
+                    if (-not (Test-Path $defaultUserPrograms)) {
+                        New-Item -ItemType Directory -Path $defaultUserPrograms -Force | Out-Null
+                    }
+                    $defaultShortcutPath = "$defaultUserPrograms\Thorium Browser.lnk"
+                    $shortcut2 = $wshShell.CreateShortcut($defaultShortcutPath)
+                    $shortcut2.TargetPath = "C:\Program Files\Thorium\thorium.exe"
+                    $shortcut2.WorkingDirectory = "C:\Program Files\Thorium"
+                    $shortcut2.Description = "Thorium Browser - Fast Chromium-based browser"
+                    $shortcut2.Save()
+                    
+                    Write-Host "✓ Thorium browser installed successfully" -ForegroundColor Green
+                    Write-Host "  Location: C:\Program Files\Thorium" -ForegroundColor Gray
+                    return $true
+                } else {
+                    Write-Warning "No suitable download found in latest release"
+                    return $false
+                }
+            } catch {
+                Write-Warning "Failed to download Thorium from GitHub: $_"
+                return $false
+            }
+        } catch {
+            Write-Warning "Error installing Thorium: $_"
+            return $false
+        } finally {
+            # Cleanup temp directory
+            if (Test-Path $tempDir) {
+                Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    
+    # Load registry for Thorium installation
+    Write-Host "Loading registry for Thorium installation..." -ForegroundColor Gray
+    reg load HKLM\zSOFTWARE $scratchDir\Windows\System32\config\SOFTWARE | Out-Null
+    
+    # Install Thorium
+    $thoriumInstalled = Add-ThoriumBrowser -MountPath $scratchDir -ScriptRoot $scriptRoot
+    
+    # Set Thorium as default browser (optional, via registry)
+    if ($thoriumInstalled) {
+        Write-Host "Configuring Thorium as default browser..." -ForegroundColor Cyan
+        try {
+            # Set HTTP/HTTPS handlers to Thorium
+            $thoriumPath = "C:\Program Files\Thorium\thorium.exe"
+            & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\http\shell\open\command' '/ve' '/t' 'REG_SZ' "/d`"$thoriumPath`" `"%1`"" '/f' | Out-Null
+            & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\https\shell\open\command' '/ve' '/t' 'REG_SZ' "/d`"$thoriumPath`" `"%1`"" '/f' | Out-Null
+            Write-Host "  ✓ Thorium configured as default browser" -ForegroundColor Green
+        } catch {
+            Write-Warning "  ⚠ Failed to set Thorium as default browser: $_"
+        }
+    } else {
+        Write-Warning "Thorium installation failed, skipping default browser configuration"
+    }
+    
+    # Unload registry
+    reg unload HKLM\zSOFTWARE | Out-Null
+    
+    Write-Host "=== Thorium Installation Complete ===" -ForegroundColor Cyan
 }
 
 # Cleanup image
