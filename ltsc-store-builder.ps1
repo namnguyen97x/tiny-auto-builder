@@ -455,6 +455,14 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
         -DisableUselessJunks:$true
 }
 
+# Ensure Microsoft Store is allowed and required services are enabled (avoid Store not opening)
+Write-Host "Ensuring Store policies and services are enabled..." -ForegroundColor Cyan
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\WindowsStore' '/v' 'RemoveWindowsStore' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\ClipSVC' '/v' 'Start' '/t' 'REG_DWORD' '/d' '3' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\AppXSvc' '/v' 'Start' '/t' 'REG_DWORD' '/d' '3' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\AppXSvc' '/v' 'DelayedAutoStart' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' '/v' 'NoUseStoreOpenWith' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+
 # Bypass system requirements
 Write-Host "Bypassing system requirements..." -ForegroundColor Cyan
 & 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
