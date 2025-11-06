@@ -132,14 +132,14 @@ jobs:
           
           if ($addStore -ne 'yes') {
             Write-Host "AddStore=$addStore, skipping Store packages download" -ForegroundColor Yellow
-            $storeDir = "$PSScriptRoot\StorePackages"
+            $storeDir = "$env:GITHUB_WORKSPACE\StorePackages"
             New-Item -ItemType Directory -Force -Path $storeDir | Out-Null
             echo "STORE_PACKAGES_DIR=$storeDir" >> $env:GITHUB_ENV
             exit 0
           }
           
           $ErrorActionPreference = 'Stop'
-          $storeDir = "$PSScriptRoot\StorePackages"
+          $storeDir = "$env:GITHUB_WORKSPACE\StorePackages"
           
           Write-Host "=== Downloading Microsoft Store Packages ===" -ForegroundColor Cyan
           Write-Host "From: https://github.com/R-YaTian/LTSC-Add-MicrosoftStore-2021_2024"
@@ -377,10 +377,12 @@ jobs:
           Write-Host "Debloat options: Defender=$removeDefender, AI=$removeAI, Edge=$removeEdge, AddStore=$addStore" -ForegroundColor Cyan
           
           # Run the builder script
-          $scriptPath = Join-Path $PSScriptRoot "ltsc-store-builder.ps1"
+          $scriptPath = Join-Path $env:GITHUB_WORKSPACE "ltsc-store-builder.ps1"
           
           if (-not (Test-Path $scriptPath)) {
             Write-Error "LTSC builder script not found at: $scriptPath"
+            Write-Host "Available files in workspace:" -ForegroundColor Yellow
+            Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter "*.ps1" | ForEach-Object { Write-Host "  - $($_.Name)" }
             exit 1
           }
           
@@ -423,7 +425,7 @@ jobs:
           
           # Use ISO path from script output or construct from IsoName
           if (-not $env:ISO_PATH) {
-            $env:ISO_PATH = Join-Path $PSScriptRoot $isoName
+            $env:ISO_PATH = Join-Path $env:GITHUB_WORKSPACE $isoName
           }
           
           if (-not (Test-Path $env:ISO_PATH)) {
