@@ -260,7 +260,7 @@ jobs:
           Write-Host "ISO Name: $isoName"
           Write-Host "Debloat options: Defender=$removeDefender, AI=$removeAI, Edge=$removeEdge, Thorium=$addThorium" -ForegroundColor Cyan
 
-          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'ltsc-store-builder.ps1'
+          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'ltsc-builder.ps1'
           if (-not (Test-Path $scriptPath)) {
             Write-Error "LTSC builder script not found at: $scriptPath"
             Write-Host 'Available files in workspace:' -ForegroundColor Yellow
