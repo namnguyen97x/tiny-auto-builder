@@ -6,9 +6,6 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$DriveLetter,
     
-    [Parameter(Mandatory=$false)]
-    [string]$StorePackagesDir = '',
-    
     [Parameter(Mandatory=$true)]
     [string]$Edition,
     
@@ -26,10 +23,6 @@ param(
     [ValidateSet('yes','no')]
     [string]$RemoveAI = 'no',
     
-    # Add Store option (yes = add Store, no = don't add Store)
-    [ValidateSet('yes','no')]
-    [string]$AddStore = 'yes',
-    
     # IRST driver path (optional, path to folder containing IRST driver .inf files)
     # If not provided, will use IRST_Driver folder in project root
     [string]$IrstDriverPath = '',
@@ -43,7 +36,6 @@ $ErrorActionPreference = 'Continue'
 
 # Debloat settings - tự động enable theo chính sách của maker
 # RemoveAI được set từ parameter (default='no' vì LTSC thường không có AI chính thức)
-# và có option AddStore để thêm Microsoft Store
 $EnableDebloat = 'yes'
 $RemoveAppx = 'yes'
 $RemoveCapabilities = 'yes'
@@ -53,7 +45,8 @@ $DisableTelemetry = 'yes'
 $DisableSponsoredApps = 'yes'
 $DisableAds = 'yes'
 # $RemoveAI được set từ parameter (không hardcode nữa)
-$RemoveStore = if ($AddStore -eq 'yes') { 'no' } else { 'yes' }  # Remove Store if AddStore=no
+# Store feature removed: always remove Store components
+$RemoveStore = 'yes'
 
 # Determine script root directory (works in both local and GitHub Actions)
 $scriptRoot = $PSScriptRoot
@@ -76,7 +69,6 @@ if ($EnableDebloat -eq 'yes') {
 
 Write-Host "=== Windows LTSC ISO Builder with Store ===" -ForegroundColor Cyan
 Write-Host "Drive Letter: $DriveLetter"
-Write-Host "Store Packages: $StorePackagesDir"
 Write-Host "Target Edition: $Edition"
 Write-Host "ISO Name: $IsoName"
 Write-Host "Debloat options: Defender=$RemoveDefender, AI=$RemoveAI, Edge=$RemoveEdge, Store=$RemoveStore, AddStore=$AddStore" -ForegroundColor Cyan
@@ -88,11 +80,7 @@ if (-not (Test-Path "$DriveLetter\sources\install.wim") -and -not (Test-Path "$D
     exit 1
 }
 
-# StorePackagesDir is only required if AddStore = yes
-if ($AddStore -eq 'yes' -and (-not $StorePackagesDir -or -not (Test-Path $StorePackagesDir))) {
-    Write-Error "Store packages directory required when AddStore=yes, but not found: $StorePackagesDir"
-    exit 1
-}
+# Store feature removed: no StorePackagesDir validation
 
 $mainOSDrive = $env:SystemDrive
 $scratchDir = "$mainOSDrive\scratchdir"
@@ -581,209 +569,7 @@ if ($IrstDriverPath -or (Test-Path (Join-Path $scriptRoot "IRST_Driver"))) {
     Add-DriverToImage -MountPath $scratchDir -DriverPath $IrstDriverPath -ImageName "install.wim"
 }
 
-# Add Store packages if AddStore = yes
-if ($AddStore -eq 'yes' -and $StorePackagesDir -and (Test-Path $StorePackagesDir)) {
-    Write-Host "=== Adding Microsoft Store Packages ===" -ForegroundColor Cyan
-    Write-Host "Note: Adding Store packages will increase image size (~200-300MB)" -ForegroundColor Yellow
-    $storePackages = Get-ChildItem -Path $StorePackagesDir -Filter "*.Appx*" -Recurse
-
-    if ($storePackages.Count -eq 0) {
-        Write-Warning "No Store packages found in $StorePackagesDir"
-        Write-Warning "Skipping Store installation..."
-    } else {
-        Write-Host "Found $($storePackages.Count) Store package file(s)" -ForegroundColor Green
-        
-        # Helper function to detect architecture from filename
-        function Get-PackageArchitecture {
-            param([string]$FileName)
-            if ($FileName -like '*_neutral_*') { return 'neutral' }
-            if ($FileName -like '*_x64_*' -or $FileName -like '*x64*') { return 'x64' }
-            if ($FileName -like '*_x86_*' -or $FileName -like '*x86*') { return 'x86' }
-            if ($FileName -like '*_arm64_*' -or $FileName -like '*arm64*') { return 'arm64' }
-            return 'unknown'
-        }
-        
-        # Helper function to find packages by pattern and architecture
-        function Find-Packages {
-            param(
-                [string]$Pattern,
-                [string[]]$ArchFilter = @('x64', 'x86', 'neutral', 'arm64')
-            )
-            $found = $storePackages | Where-Object { 
-                $_.Name -like "$Pattern*" -and (Get-PackageArchitecture -FileName $_.Name) -in $ArchFilter
-            }
-            return $found
-        }
-        
-        # Find all dependency packages (based on batch script logic)
-        $vclibsX64 = Find-Packages -Pattern 'Microsoft.VCLibs.140.00' -ArchFilter @('x64') | Where-Object { $_.Name -notlike '*UWP*' } | Select-Object -First 1
-        $vclibsX86 = Find-Packages -Pattern 'Microsoft.VCLibs.140.00' -ArchFilter @('x86') | Where-Object { $_.Name -notlike '*UWP*' } | Select-Object -First 1
-        $vclibsUWPX64 = Find-Packages -Pattern 'Microsoft.VCLibs.140.00.UWP' -ArchFilter @('x64') | Select-Object -First 1
-        $vclibsUWPX86 = Find-Packages -Pattern 'Microsoft.VCLibs.140.00.UWP' -ArchFilter @('x86') | Select-Object -First 1
-        $frameworkX64 = Find-Packages -Pattern 'Microsoft.NET.Native.Framework.2.2' -ArchFilter @('x64') | Select-Object -First 1
-        $frameworkX86 = Find-Packages -Pattern 'Microsoft.NET.Native.Framework.2.2' -ArchFilter @('x86') | Select-Object -First 1
-        $runtimeX64 = Find-Packages -Pattern 'Microsoft.NET.Native.Runtime.2.2' -ArchFilter @('x64') | Select-Object -First 1
-        $runtimeX86 = Find-Packages -Pattern 'Microsoft.NET.Native.Runtime.2.2' -ArchFilter @('x86') | Select-Object -First 1
-        $uixamlX64 = Find-Packages -Pattern 'Microsoft.UI.Xaml' -ArchFilter @('x64') | Select-Object -First 1
-        $uixamlX86 = Find-Packages -Pattern 'Microsoft.UI.Xaml' -ArchFilter @('x86') | Select-Object -First 1
-        
-        # Find main packages
-        $storePackage = Find-Packages -Pattern 'Microsoft.WindowsStore' -ArchFilter @('neutral') | Select-Object -First 1
-        $purchaseApp = Find-Packages -Pattern 'Microsoft.StorePurchaseApp' -ArchFilter @('neutral') | Select-Object -First 1
-        $appInstaller = Find-Packages -Pattern 'Microsoft.DesktopAppInstaller' -ArchFilter @('neutral') | Select-Object -First 1
-        $xboxIdentity = Find-Packages -Pattern 'Microsoft.XboxIdentityProvider' -ArchFilter @('neutral') | Select-Object -First 1
-        
-        $installedPackages = @()
-        $failedPackages = @()
-        
-        # Verify Store package exists
-        if (-not $storePackage) {
-            Write-Error "WindowsStore package not found!"
-            exit 1
-        }
-        
-        # Build dependency arrays for each package (based on batch script)
-        $depStore = @()
-        if ($vclibsX64) { $depStore += $vclibsX64.FullName }
-        if ($vclibsX86) { $depStore += $vclibsX86.FullName }
-        if ($vclibsUWPX64) { $depStore += $vclibsUWPX64.FullName }
-        if ($vclibsUWPX86) { $depStore += $vclibsUWPX86.FullName }
-        if ($frameworkX64) { $depStore += $frameworkX64.FullName }
-        if ($frameworkX86) { $depStore += $frameworkX86.FullName }
-        if ($runtimeX64) { $depStore += $runtimeX64.FullName }
-        if ($runtimeX86) { $depStore += $runtimeX86.FullName }
-        if ($uixamlX64) { $depStore += $uixamlX64.FullName }
-        if ($uixamlX86) { $depStore += $uixamlX86.FullName }
-        
-        $depPurchase = @()
-        if ($vclibsX64) { $depPurchase += $vclibsX64.FullName }
-        if ($vclibsX86) { $depPurchase += $vclibsX86.FullName }
-        if ($frameworkX64) { $depPurchase += $frameworkX64.FullName }
-        if ($frameworkX86) { $depPurchase += $frameworkX86.FullName }
-        if ($runtimeX64) { $depPurchase += $runtimeX64.FullName }
-        if ($runtimeX86) { $depPurchase += $runtimeX86.FullName }
-        
-        $depInstaller = @()
-        if ($vclibsX64) { $depInstaller += $vclibsX64.FullName }
-        if ($vclibsX86) { $depInstaller += $vclibsX86.FullName }
-        
-        $depXbox = @()
-        if ($vclibsX64) { $depXbox += $vclibsX64.FullName }
-        if ($vclibsX86) { $depXbox += $vclibsX86.FullName }
-        if ($frameworkX64) { $depXbox += $frameworkX64.FullName }
-        if ($frameworkX86) { $depXbox += $frameworkX86.FullName }
-        if ($runtimeX64) { $depXbox += $runtimeX64.FullName }
-        if ($runtimeX86) { $depXbox += $runtimeX86.FullName }
-        
-        # Verify all Store dependencies exist
-        $missingDeps = @()
-        foreach ($dep in $depStore) {
-            if (-not (Test-Path $dep)) {
-                $missingDeps += (Split-Path $dep -Leaf)
-            }
-        }
-        if ($missingDeps.Count -gt 0) {
-            Write-Error "Missing Store dependencies: $($missingDeps -join ', ')"
-            exit 1
-        }
-        
-        # Install Store with all dependencies (based on batch script: Add-appxProvisionedPackage with DependencyPackagePath)
-        Write-Host "Installing Microsoft Store with dependencies..." -ForegroundColor Cyan
-        Write-Host "  Store package: $($storePackage.Name)" -ForegroundColor Gray
-        Write-Host "  Dependencies: $($depStore.Count) package(s)" -ForegroundColor Gray
-        try {
-            $result = Add-ProvisionedAppxPackage -Path $scratchDir -PackagePath $storePackage.FullName -DependencyPackagePath $depStore -SkipLicense -ErrorAction Stop
-            if ($result) {
-                Write-Host "  ✓ Store installed successfully" -ForegroundColor Green
-                $installedPackages += $storePackage.Name
-            } else {
-                Write-Warning "  ⚠ No output from Add-ProvisionedAppxPackage"
-                $failedPackages += $storePackage.Name
-            }
-        } catch {
-            Write-Error "  ✗ Failed to install Store: $_"
-            $failedPackages += $storePackage.Name
-        }
-        
-        # Install Store Purchase App (if exists)
-        if ($purchaseApp) {
-            Write-Host "Installing Store Purchase App..." -ForegroundColor Cyan
-            Write-Host "  Package: $($purchaseApp.Name)" -ForegroundColor Gray
-            Write-Host "  Dependencies: $($depPurchase.Count) package(s)" -ForegroundColor Gray
-            try {
-                $result = Add-ProvisionedAppxPackage -Path $scratchDir -PackagePath $purchaseApp.FullName -DependencyPackagePath $depPurchase -SkipLicense -ErrorAction Stop
-                if ($result) {
-                    Write-Host "  ✓ Store Purchase App installed successfully" -ForegroundColor Green
-                    $installedPackages += $purchaseApp.Name
-                } else {
-                    Write-Warning "  ⚠ No output from Add-ProvisionedAppxPackage"
-                    $failedPackages += $purchaseApp.Name
-                }
-            } catch {
-                Write-Warning "  ✗ Failed to install Store Purchase App: $_"
-                $failedPackages += $purchaseApp.Name
-            }
-        }
-        
-        # Install Desktop App Installer (if exists)
-        if ($appInstaller) {
-            Write-Host "Installing Desktop App Installer..." -ForegroundColor Cyan
-            Write-Host "  Package: $($appInstaller.Name)" -ForegroundColor Gray
-            Write-Host "  Dependencies: $($depInstaller.Count) package(s)" -ForegroundColor Gray
-            try {
-                $result = Add-ProvisionedAppxPackage -Path $scratchDir -PackagePath $appInstaller.FullName -DependencyPackagePath $depInstaller -SkipLicense -ErrorAction Stop
-                if ($result) {
-                    Write-Host "  ✓ Desktop App Installer installed successfully" -ForegroundColor Green
-                    $installedPackages += $appInstaller.Name
-                } else {
-                    Write-Warning "  ⚠ No output from Add-ProvisionedAppxPackage"
-                    $failedPackages += $appInstaller.Name
-                }
-            } catch {
-                Write-Warning "  ✗ Failed to install Desktop App Installer: $_"
-                $failedPackages += $appInstaller.Name
-            }
-        }
-        
-        # Install Xbox Identity Provider (if exists)
-        if ($xboxIdentity) {
-            Write-Host "Installing Xbox Identity Provider..." -ForegroundColor Cyan
-            Write-Host "  Package: $($xboxIdentity.Name)" -ForegroundColor Gray
-            Write-Host "  Dependencies: $($depXbox.Count) package(s)" -ForegroundColor Gray
-            try {
-                $result = Add-ProvisionedAppxPackage -Path $scratchDir -PackagePath $xboxIdentity.FullName -DependencyPackagePath $depXbox -SkipLicense -ErrorAction Stop
-                if ($result) {
-                    Write-Host "  ✓ Xbox Identity Provider installed successfully" -ForegroundColor Green
-                    $installedPackages += $xboxIdentity.Name
-                } else {
-                    Write-Warning "  ⚠ No output from Add-ProvisionedAppxPackage"
-                    $failedPackages += $xboxIdentity.Name
-                }
-            } catch {
-                Write-Warning "  ✗ Failed to install Xbox Identity Provider: $_"
-                $failedPackages += $xboxIdentity.Name
-            }
-        }
-        
-        # Count packages after Store installation
-        $packagesAfterStore = (Get-ProvisionedAppxPackage -Path $scratchDir -ErrorAction SilentlyContinue).Count
-        Write-Host "=== Store Installation Summary ===" -ForegroundColor Cyan
-        Write-Host "Successfully installed: $($installedPackages.Count) package(s)" -ForegroundColor Green
-        Write-Host "Total AppX packages after Store install: $packagesAfterStore" -ForegroundColor Gray
-        if ($failedPackages.Count -gt 0) {
-            Write-Host "Failed: $($failedPackages.Count) package(s)" -ForegroundColor Yellow
-            foreach ($failed in $failedPackages) {
-                Write-Host "  - $failed" -ForegroundColor Yellow
-            }
-        }
-    }
-} else {
-    if ($AddStore -eq 'yes') {
-        Write-Warning "AddStore=yes but Store packages directory not provided or not found. Skipping Store installation."
-    } else {
-        Write-Host "AddStore=no, skipping Store installation" -ForegroundColor Gray
-    }
-}
+# Store feature removed: no Store installation logic
 
 # Add Thorium browser (independent of Edge removal)
 if ($AddThorium -eq 'yes') {
