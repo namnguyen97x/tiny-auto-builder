@@ -227,15 +227,20 @@ jobs:
         shell: pwsh
         id: download-iso
         env:
-          ISO_URL_INPUT: ${{ github.event.inputs.iso_url }}
+          ISO_URL_INPUT: ${{ github.event.inputs.iso_url || inputs.iso_url || '' }}
         run: |
           $ErrorActionPreference = 'Stop'
           
+          # Default LTSC ISO URL (Windows 11 Enterprise LTSC 2024)
+          $defaultIsoUrl = 'https://ia804505.us.archive.org/29/items/windows_11_enterprise_ltsc_2024/en-us_windows_11_enterprise_ltsc_2024_x64_dvd_965cfb00.iso'
+          
           $isoUrl = $env:ISO_URL_INPUT
           if (-not $isoUrl -or $isoUrl.Trim() -eq '') {
-            Write-Error "ISO URL is required for LTSC build. Please provide iso_url parameter."
-            exit 1
+            Write-Host "ISO URL not provided, using default LTSC ISO URL" -ForegroundColor Yellow
+            $isoUrl = $defaultIsoUrl
           }
+          
+          Write-Host "Using ISO URL: $isoUrl" -ForegroundColor Cyan
           
           $isoFilePath = "$env:RUNNER_TEMP\windows-ltsc.iso"
           
