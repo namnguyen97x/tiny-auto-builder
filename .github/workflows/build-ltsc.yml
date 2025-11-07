@@ -1,6 +1,6 @@
-name: Build LTSC ISO with Store
+name: Build LTSC ISO
 
-# Build Windows LTSC ISO with Microsoft Store support
+# Build Windows LTSC ISO
 # Supports Enterprise LTSC, IoT Enterprise LTSC, IoT Enterprise Subscription LTSC editions
 
 on:
@@ -14,11 +14,6 @@ on:
         description: 'LTSC Edition to build'
         required: false
         default: 'IoT Enterprise LTSC'
-        type: string
-      add_store:
-        description: 'Add Microsoft Store to ISO (default: yes)'
-        required: false
-        default: 'yes'
         type: string
       remove_defender:
         description: 'Remove Windows Defender (default: no)'
@@ -41,7 +36,7 @@ on:
         default: 'no'
         type: string
       iso_name:
-        description: 'Custom ISO filename (leave empty to use default: ltsc-store.iso)'
+        description: 'Custom ISO filename (leave empty to use default: ltsc.iso)'
         required: false
         type: string
   workflow_dispatch:
@@ -59,11 +54,6 @@ on:
           - Enterprise LTSC
           - IoT Enterprise LTSC
           - IoT Enterprise Subscription LTSC
-      add_store:
-        description: 'Add Microsoft Store to ISO'
-        required: false
-        default: true
-        type: boolean
       remove_defender:
         description: 'Remove Windows Defender'
         required: false
@@ -85,7 +75,7 @@ on:
         default: false
         type: boolean
       iso_name:
-        description: 'Custom ISO filename (leave empty to use default: ltsc-store.iso)'
+        description: 'Custom ISO filename (leave empty to use default: ltsc.iso)'
         required: false
         type: string
 
@@ -219,7 +209,7 @@ jobs:
         id: build
         env:
           EDITION: ${{ github.event.inputs.edition || inputs.edition || 'IoT Enterprise LTSC' }}
-          ISO_NAME: ${{ github.event.inputs.iso_name || inputs.iso_name || 'ltsc-store.iso' }}
+          ISO_NAME: ${{ github.event.inputs.iso_name || inputs.iso_name || 'ltsc.iso' }}
           REMOVE_DEFENDER: ${{ github.event.inputs.remove_defender || inputs.remove_defender || 'no' }}
           REMOVE_EDGE: ${{ github.event.inputs.remove_edge || inputs.remove_edge || 'yes' }}
           REMOVE_AI: ${{ github.event.inputs.remove_ai || inputs.remove_ai || 'no' }}
@@ -248,7 +238,7 @@ jobs:
           }
 
           $edition = $env:EDITION
-          $isoName  = if ($env:ISO_NAME) { $env:ISO_NAME } else { 'ltsc-store.iso' }
+          $isoName  = if ($env:ISO_NAME) { $env:ISO_NAME } else { 'ltsc.iso' }
           $removeDefender = Convert-ToYesNo $env:REMOVE_DEFENDER 'no'
           $removeEdge = Convert-ToYesNo $env:REMOVE_EDGE 'yes'
           $removeAI = Convert-ToYesNo $env:REMOVE_AI 'no'
@@ -305,7 +295,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ltsc-store-iso
+          name: ltsc-iso
           path: ${{ env.ISO_PATH }}
           retention-days: 30
 
