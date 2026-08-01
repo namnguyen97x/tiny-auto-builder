@@ -1,0 +1,19 @@
+# ISO images
+*.iso
+
+# Log files
+*.log
+
+# Executables & temporary build folders
+oscdimg.exe
+scratchdir/
+tiny11/
+ltsc/
+ThoriumDownload/
+
+# Operating System & IDE files
+.DS_Store
+Thumbs.db
+*.tmp
+.vscode/
+.idea/

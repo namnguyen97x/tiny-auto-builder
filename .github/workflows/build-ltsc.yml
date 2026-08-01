@@ -1,0 +1,317 @@
+name: Build LTSC ISO
+
+# Build Windows LTSC ISO
+# Supports Enterprise LTSC, IoT Enterprise LTSC, IoT Enterprise Subscription LTSC editions
+
+on:
+  workflow_call:
+    inputs:
+      iso_url:
+        description: 'Windows LTSC ISO URL'
+        required: false
+        type: string
+      edition:
+        description: 'LTSC Edition to build'
+        required: false
+        default: 'IoT Enterprise LTSC'
+        type: string
+      remove_defender:
+        description: 'Remove Windows Defender (default: no)'
+        required: false
+        default: 'no'
+        type: string
+      remove_edge:
+        description: 'Remove Microsoft Edge (default: yes)'
+        required: false
+        default: 'yes'
+        type: string
+      remove_ai:
+        description: 'Remove AI/Copilot (default: no, LTSC typically does not have official AI support)'
+        required: false
+        default: 'no'
+        type: string
+      add_thorium:
+        description: 'Add Thorium browser (independent of Edge removal, default: no)'
+        required: false
+        default: 'no'
+        type: string
+      iso_name:
+        description: 'Custom ISO filename (leave empty to use default: ltsc.iso)'
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      iso_url:
+        description: 'Windows LTSC ISO URL'
+        required: false
+        type: string
+      edition:
+        description: 'LTSC Edition to build'
+        required: false
+        default: 'IoT Enterprise LTSC'
+        type: choice
+        options:
+          - Enterprise LTSC
+          - IoT Enterprise LTSC
+          - IoT Enterprise Subscription LTSC
+      remove_defender:
+        description: 'Remove Windows Defender'
+        required: false
+        default: false
+        type: boolean
+      remove_edge:
+        description: 'Remove Microsoft Edge'
+        required: false
+        default: true
+        type: boolean
+      remove_ai:
+        description: 'Remove AI/Copilot (LTSC typically does not have official AI support)'
+        required: false
+        default: false
+        type: boolean
+      add_thorium:
+        description: 'Add Thorium browser (independent of Edge removal)'
+        required: false
+        default: false
+        type: boolean
+      iso_name:
+        description: 'Custom ISO filename (leave empty to use default: ltsc.iso)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE20: 'true'
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PowerShell and Environment
+        shell: pwsh
+        run: |
+          $PSVersionTable
+          Write-Host "PowerShell version: $($PSVersionTable.PSVersion)"
+          Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+          $PSDefaultParameterValues['*:ErrorAction'] = 'SilentlyContinue'
+
+          Write-Host "=== System Information ===" -ForegroundColor Cyan
+          Write-Host "CPU Cores: $env:NUMBER_OF_PROCESSORS"
+          Write-Host "OS Version: $([System.Environment]::OSVersion.VersionString)"
+
+          $drive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -gt 0 } | Select-Object -First 1
+          if ($drive) {
+            $freeSpaceGB = [math]::Round($drive.Free / 1GB, 2)
+            Write-Host "Available disk space: $freeSpaceGB GB"
+          }
+
+          $env:DISM_MAX_THREADS = $env:NUMBER_OF_PROCESSORS
+          Write-Host "DISM optimization: Max threads = $env:DISM_MAX_THREADS"
+
+      # Store feature removed entirely
+
+      - name: Cache Dependencies (ISO)
+        uses: actions/cache@v4
+        id: cache-iso
+        with:
+          path: |
+            ${{ env.RUNNER_TEMP }}/windows-ltsc.iso
+          key: ltsc-iso-cache-${{ runner.os }}-${{ hashFiles('**/*.yml') }}
+          restore-keys: |
+            ltsc-iso-cache-${{ runner.os }}-
+        continue-on-error: true
+
+      - name: Download and Mount Windows LTSC ISO
+        shell: pwsh
+        id: download-iso
+        env:
+          ISO_URL_INPUT: ${{ github.event.inputs.iso_url || inputs.iso_url || '' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Default LTSC ISO URL (Windows 11 Enterprise LTSC 2024)
+          $defaultIsoUrl = 'https://ia804505.us.archive.org/29/items/windows_11_enterprise_ltsc_2024/en-us_windows_11_enterprise_ltsc_2024_x64_dvd_965cfb00.iso'
+
+          $isoUrl = $env:ISO_URL_INPUT
+          if (-not $isoUrl -or $isoUrl.Trim() -eq '') {
+            Write-Host 'ISO URL not provided, using default LTSC ISO URL' -ForegroundColor Yellow
+            $isoUrl = $defaultIsoUrl
+          }
+
+          Write-Host "Using ISO URL: $isoUrl" -ForegroundColor Cyan
+
+          $isoFilePath = "$env:RUNNER_TEMP\windows-ltsc.iso"
+
+          # Check if ISO already exists from cache
+          if (Test-Path $isoFilePath) {
+            $cachedSize = (Get-Item $isoFilePath).Length / 1GB
+            Write-Host "✓ Using cached ISO file: $([math]::Round($cachedSize, 2)) GB" -ForegroundColor Green
+          } else {
+            Write-Host "Downloading Windows LTSC ISO from: $isoUrl"
+
+            $aria2 = Get-Command aria2c -ErrorAction SilentlyContinue
+            if (-not $aria2) {
+              $chocoAria2 = 'C:\\ProgramData\\choco\\bin\\aria2c.exe'
+              if (Test-Path $chocoAria2) {
+                $env:Path = "C:\\ProgramData\\choco\\bin;$env:Path"
+                $aria2 = Get-Command aria2c -ErrorAction SilentlyContinue
+              }
+              if (-not $aria2) { choco install aria2 -y --no-progress | Out-Host }
+            }
+
+            $aria2Args = @(
+              '--max-connection-per-server=16',
+              '--split=16',
+              '--min-split-size=1M',
+              '--timeout=60',
+              '--retry-wait=3',
+              '--max-tries=5',
+              '--console-log-level=warn',
+              '--summary-interval=5',
+              '--file-allocation=none',
+              "--dir=$($env:RUNNER_TEMP)",
+              '--check-certificate=true',
+              '--auto-file-renaming=false',
+              "--out=$(Split-Path -Leaf $isoFilePath)",
+              $isoUrl
+            )
+
+            Write-Host 'Downloading with aria2c...'
+            & aria2c @aria2Args | Out-Host
+
+            if (-not (Test-Path $isoFilePath)) { throw 'ISO file not found after download' }
+            $fileSize = (Get-Item $isoFilePath).Length / 1GB
+            Write-Host "✓ ISO downloaded: $([math]::Round($fileSize, 2)) GB" -ForegroundColor Green
+          }
+
+          Write-Host "Mounting ISO file: $isoFilePath"
+          $mountResult = Mount-DiskImage -ImagePath $isoFilePath -PassThru -ErrorAction Stop
+          $volume = $mountResult | Get-Volume
+          $isoDriveLetter = $volume.DriveLetter
+
+          if ($isoDriveLetter) {
+            $isoDrive = "${isoDriveLetter}:"
+            Write-Host "✓ ISO mounted to: $isoDrive" -ForegroundColor Green
+            echo "ISO_DRIVE=$isoDrive" >> $env:GITHUB_ENV
+            echo "ISO_FILE_PATH=$isoFilePath" >> $env:GITHUB_ENV
+          } else {
+            Write-Error 'Failed to get drive letter from mounted ISO'
+            exit 1
+          }
+
+      - name: Build LTSC ISO
+        shell: pwsh
+        id: build
+        env:
+          EDITION: ${{ github.event.inputs.edition || inputs.edition || 'IoT Enterprise LTSC' }}
+          ISO_NAME: ${{ github.event.inputs.iso_name || inputs.iso_name || 'ltsc.iso' }}
+          REMOVE_DEFENDER: ${{ github.event.inputs.remove_defender || inputs.remove_defender || 'no' }}
+          REMOVE_EDGE: ${{ github.event.inputs.remove_edge || inputs.remove_edge || 'yes' }}
+          REMOVE_AI: ${{ github.event.inputs.remove_ai || inputs.remove_ai || 'no' }}
+          ADD_THORIUM: ${{ github.event.inputs.add_thorium || inputs.add_thorium || 'no' }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $buildStartTime = Get-Date
+
+          function Get-PerformanceMetrics {
+            $memInfo = Get-CimInstance Win32_OperatingSystem
+            $cpu = Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction SilentlyContinue
+            $freeMemGB = [math]::Round($memInfo.FreePhysicalMemory / 1MB, 2)
+            $cpuPercent = if ($cpu) { [math]::Round($cpu.CounterSamples[0].CookedValue, 1) } else { 'N/A' }
+            return @{ FreeMemoryGB = $freeMemGB; CPUPercent = $cpuPercent }
+          }
+
+          $isoDrive = $env:ISO_DRIVE
+          if (-not $isoDrive) { Write-Error 'ISO drive not set'; exit 1 }
+
+          function Convert-ToYesNo {
+            param($value, $default = 'yes')
+            if (-not $value) { return $default }
+            $str = $value.ToString().ToLower()
+            if ($str -in @('true','1','yes','y')) { return 'yes' }
+            return 'no'
+          }
+
+          $edition = $env:EDITION
+          $isoName  = if ($env:ISO_NAME) { $env:ISO_NAME } else { 'ltsc.iso' }
+          $removeDefender = Convert-ToYesNo $env:REMOVE_DEFENDER 'no'
+          $removeEdge = Convert-ToYesNo $env:REMOVE_EDGE 'yes'
+          $removeAI = Convert-ToYesNo $env:REMOVE_AI 'no'
+          $addThorium = Convert-ToYesNo $env:ADD_THORIUM 'no'
+
+          Write-Host '=== Build Configuration ===' -ForegroundColor Cyan
+          Write-Host "ISO Drive: $isoDrive"
+          Write-Host "Target Edition: $edition"
+          Write-Host "ISO Name: $isoName"
+          Write-Host "Debloat options: Defender=$removeDefender, AI=$removeAI, Edge=$removeEdge, Thorium=$addThorium" -ForegroundColor Cyan
+
+          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'ltsc-builder.ps1'
+          if (-not (Test-Path $scriptPath)) {
+            Write-Error "LTSC builder script not found at: $scriptPath"
+            Write-Host 'Available files in workspace:' -ForegroundColor Yellow
+            Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter '*.ps1' | ForEach-Object { Write-Host "  - $($_.Name)" }
+            exit 1
+          }
+
+          Write-Host '=== Starting Build Process ===' -ForegroundColor Cyan
+          $metricsBefore = Get-PerformanceMetrics
+          Write-Host "System metrics before build: CPU=$($metricsBefore.CPUPercent)%, Free RAM=$($metricsBefore.FreeMemoryGB) GB"
+
+          try {
+          $scriptOutput = & pwsh -File $scriptPath -DriveLetter $isoDrive -Edition $edition -IsoName $isoName -RemoveDefender $removeDefender -RemoveEdge $removeEdge -RemoveAI $removeAI -AddThorium $addThorium -IrstDriverPath '' 2>&1
+            foreach ($line in $scriptOutput) {
+              Write-Host $line
+              if ($line -match '^ISO_PATH=(.+)$') { $env:ISO_PATH = $Matches[1] }
+              if ($line -match '^ISO_NAME=(.+)$') { $env:ISO_NAME = $Matches[1] }
+              $now = Get-Date
+              if (-not $script:lastMetricsTime -or ($now - $script:lastMetricsTime).TotalMinutes -ge 2) {
+                $metrics = Get-PerformanceMetrics
+                $elapsed = $now - $buildStartTime
+                Write-Host "[Performance] [$([math]::Round($elapsed.TotalMinutes, 1)) min] CPU=$($metrics.CPUPercent)%, Free RAM=$($metrics.FreeMemoryGB) GB" -ForegroundColor Gray
+                $script:lastMetricsTime = $now
+              }
+            }
+            if ($LASTEXITCODE -ne 0) { Write-Warning "Script exited with code $LASTEXITCODE" }
+          } catch { Write-Error "Error running script: $_"; exit 1 }
+
+          if (-not $env:ISO_PATH) { $env:ISO_PATH = Join-Path $env:GITHUB_WORKSPACE $isoName }
+          if (-not (Test-Path $env:ISO_PATH)) { Write-Error "ISO was not created at expected path: $env:ISO_PATH"; exit 1 }
+
+          Write-Host "✓ ISO confirmed at: $env:ISO_PATH" -ForegroundColor Green
+          echo "ISO_PATH=$env:ISO_PATH" >> $env:GITHUB_ENV
+
+          $buildTime = (Get-Date) - $buildStartTime
+          $metricsAfter = Get-PerformanceMetrics
+          Write-Host '=== Build Summary ===' -ForegroundColor Cyan
+          Write-Host "Build time: $([math]::Round($buildTime.TotalMinutes, 2)) minutes"
+          Write-Host "System metrics after build: CPU=$($metricsAfter.CPUPercent)%, Free RAM=$($metricsAfter.FreeMemoryGB) GB"
+
+      - name: Upload ISO Artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ltsc-iso
+          path: ${{ env.ISO_PATH }}
+          retention-days: 30
+
+      - name: Post-job Cleanup
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host 'Post job cleanup...'
+          try { Start-Service -Name 'WSearch' -ErrorAction SilentlyContinue | Out-Null; Write-Host '✓ Windows Search service restored' -ForegroundColor Green } catch { Write-Host '  Info: Windows Search service restore skipped' -ForegroundColor Yellow }
+          if ($env:ISO_FILE_PATH) {
+            Write-Host "Unmounting ISO: $env:ISO_FILE_PATH"
+            try {
+              Get-DiskImage | Where-Object { $_.ImagePath -eq $env:ISO_FILE_PATH } | Dismount-DiskImage -ErrorAction Stop
+              Write-Host '✓ ISO unmounted successfully' -ForegroundColor Green
+            } catch { Write-Warning "Failed to unmount ISO: $_" }
+          }

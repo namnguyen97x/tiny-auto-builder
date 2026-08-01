@@ -1,0 +1,1520 @@
+#---------[ Parameters ]---------#
+param (
+    [ValidatePattern('^[c-zC-Z]$')][string]$ISO,
+    [switch]$NonInteractive = $false,
+    
+    # Version selector (Auto, Pro, Home, ProWorkstations)
+    [ValidateSet('Auto','Pro','Home','ProWorkstations')][string]$VersionSelector = 'Auto',
+    
+    # Optional debloat options (honored from workflow)
+    [ValidateSet('yes','no')][string]$RemoveDefender = 'yes',
+    [ValidateSet('yes','no')][string]$RemoveAI = 'yes',
+    [ValidateSet('yes','no')][string]$RemoveEdge = 'yes',
+    [ValidateSet('yes','no')][string]$RemoveStore = 'yes',
+    
+    # Custom ISO filename (optional, defaults to tiny11-core.iso)
+    [string]$IsoName = '',
+    
+    # IRST driver path (optional, path to folder containing IRST driver .inf files)
+    # If not provided, will use IRST_Driver folder in project root
+    [string]$IrstDriverPath = '',
+    
+    # Add Thorium browser
+    [ValidateSet('yes','no')][string]$AddThorium = 'no',
+    
+    # Preset configuration profile (name or path, e.g. 'gaming', 'minimal-vm', 'default')
+    [string]$Preset = '',
+    
+    # Custom apps to install via Winget on FirstLogon
+    [string[]]$InstallApps = @()
+)
+
+# Set error handling to continue on non-critical errors
+# Script will only exit on critical failures (ISO creation, mounting, etc.)
+$ErrorActionPreference = 'Continue'
+
+if ((Get-ExecutionPolicy) -eq 'Restricted') {
+    if ($NonInteractive) {
+        Write-Host "Execution policy is Restricted. Attempting to set to RemoteSigned..."
+        Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false -Force
+    } else {
+        Write-Host "Your current PowerShell Execution Policy is set to Restricted, which prevents scripts from running. Do you want to change it to RemoteSigned? (yes/no)"
+        $response = Read-Host
+        if ($response -eq 'yes') {
+            Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false
+        } else {
+            Write-Host "The script cannot be run without changing the execution policy. Exiting..."
+            exit
+        }
+    }
+}
+
+# Debloat settings - tự động enable theo chính sách của core maker
+# RemoveDefender, RemoveAI, RemoveEdge, RemoveStore được set từ parameters (honored from workflow)
+$EnableDebloat = 'yes'
+$RemoveAppx = 'yes'
+$RemoveCapabilities = 'yes'
+$RemoveWindowsPackages = 'yes'
+$RemoveOneDrive = 'yes'
+$DisableTelemetry = 'yes'
+$DisableSponsoredApps = 'yes'
+$DisableAds = 'yes'
+
+$DisableThirdPartyTelemetry = 'yes'
+$TuneMouseLatency = 'yes'
+$TuneDefenderCpuLimit = 'yes'
+$EnableUltimatePerformance = 'no'
+
+# Import debloater module
+if ($EnableDebloat -eq 'yes') {
+    $modulePath = Join-Path $PSScriptRoot "tiny11-debloater.psm1"
+    if (Test-Path $modulePath) {
+        Import-Module $modulePath -Force -ErrorAction SilentlyContinue
+        Write-Host "Debloater module loaded"
+    } else {
+        Write-Warning "Debloater module not found at $modulePath. Debloat features will be disabled."
+        $EnableDebloat = 'no'
+    }
+}
+
+# Load Preset configuration if specified
+if ($Preset -and (Get-Command Get-PresetConfig -ErrorAction SilentlyContinue)) {
+    $presetObj = Get-PresetConfig -PresetNameOrPath $Preset
+    if ($presetObj) {
+        Write-Host "Applying Preset: $($presetObj.name) - $($presetObj.description)" -ForegroundColor Cyan
+        if ($presetObj.debloat) {
+            if ($null -ne $presetObj.debloat.removeDefender) { $RemoveDefender = if ($presetObj.debloat.removeDefender) { 'yes' } else { 'no' } }
+            if ($null -ne $presetObj.debloat.removeAI) { $RemoveAI = if ($presetObj.debloat.removeAI) { 'yes' } else { 'no' } }
+            if ($null -ne $presetObj.debloat.removeEdge) { $RemoveEdge = if ($presetObj.debloat.removeEdge) { 'yes' } else { 'no' } }
+            if ($null -ne $presetObj.debloat.removeStore) { $RemoveStore = if ($presetObj.debloat.removeStore) { 'yes' } else { 'no' } }
+        }
+        if ($presetObj.privacy) {
+            if ($null -ne $presetObj.privacy.disableThirdPartyTelemetry) { $DisableThirdPartyTelemetry = if ($presetObj.privacy.disableThirdPartyTelemetry) { 'yes' } else { 'no' } }
+        }
+        if ($presetObj.performance) {
+            if ($null -ne $presetObj.performance.tuneMouseLatency) { $TuneMouseLatency = if ($presetObj.performance.tuneMouseLatency) { 'yes' } else { 'no' } }
+            if ($null -ne $presetObj.performance.tuneDefenderCpuLimit) { $TuneDefenderCpuLimit = if ($presetObj.performance.tuneDefenderCpuLimit) { 'yes' } else { 'no' } }
+            if ($null -ne $presetObj.performance.enableUltimatePerformance) { $EnableUltimatePerformance = if ($presetObj.performance.enableUltimatePerformance) { 'yes' } else { 'no' } }
+        }
+        if ($presetObj.installApps -and $InstallApps.Count -eq 0) {
+            $InstallApps = $presetObj.installApps
+        }
+    }
+}
+
+
+# Check and run the script as admin if required
+$adminSID = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
+$adminGroup = $adminSID.Translate([System.Security.Principal.NTAccount])
+$myWindowsID=[System.Security.Principal.WindowsIdentity]::GetCurrent()
+$myWindowsPrincipal=new-object System.Security.Principal.WindowsPrincipal($myWindowsID)
+$adminRole=[System.Security.Principal.WindowsBuiltInRole]::Administrator
+if (! $myWindowsPrincipal.IsInRole($adminRole))
+{
+    Write-Host "Restarting Tiny11 image creator as admin in a new window, you can close this one."
+    $newProcess = new-object System.Diagnostics.ProcessStartInfo "PowerShell";
+    $newProcess.Arguments = $myInvocation.MyCommand.Definition;
+    $newProcess.Verb = "runas";
+    [System.Diagnostics.Process]::Start($newProcess);
+    exit
+}
+Start-Transcript -Path "$PSScriptRoot\tiny11.log" 
+# Ask the user for input
+Write-Host "Welcome to tiny11 core builder! BETA 09-05-25"
+Write-Host "This script generates a significantly reduced Windows 11 image. However, it's not suitable for regular use due to its lack of serviceability - you can't add languages, updates, or features post-creation. tiny11 Core is not a full Windows 11 substitute but a rapid testing or development tool, potentially useful for VM environments."
+
+function Dismount-RegistryHives {
+    param(
+        [string[]]$Hives = @('zCOMPONENTS', 'zDEFAULT', 'zNTUSER', 'zSOFTWARE', 'zSYSTEM')
+    )
+    Write-Host "Unmounting registry hives..." -ForegroundColor Cyan
+    
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+    [System.GC]::Collect()
+    Start-Sleep -Seconds 1
+
+    foreach ($hive in $Hives) {
+        $regPath = "HKLM\$hive"
+        $unloaded = $false
+        for ($i = 1; $i -le 5; $i++) {
+            [System.GC]::Collect()
+            [System.GC]::WaitForPendingFinalizers()
+            $res = & reg unload $regPath 2>&1
+            if ($LASTEXITCODE -eq 0 -or $res -match "not loaded" -or $res -match "unable to find") {
+                Write-Host "  ✓ Unloaded or not mounted: $regPath" -ForegroundColor Green
+                $unloaded = $true
+                break
+            } else {
+                Write-Host "  Attempt $($i): Failed to unload $regPath ($res). Retrying in 2 seconds..." -ForegroundColor Yellow
+                Start-Sleep -Seconds 2
+            }
+        }
+
+        if (-not $unloaded) {
+            Write-Warning "Failed to unload registry hive $regPath after 5 attempts."
+        }
+    }
+}
+
+function Dismount-WindowsImageWithRetry {
+    param(
+        [string]$Path,
+        [switch]$Save = $true
+    )
+    Write-Host "Dismounting Windows Image at $Path..." -ForegroundColor Cyan
+    
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+    [System.GC]::Collect()
+    Start-Sleep -Seconds 2
+
+    $success = $false
+    for ($i = 1; $i -le 5; $i++) {
+        try {
+            if ($Save) {
+                Dismount-WindowsImage -Path $Path -Save -ErrorAction Stop
+            } else {
+                Dismount-WindowsImage -Path $Path -Discard -ErrorAction Stop
+            }
+            Write-Host "✓ Dismounted Windows Image at $Path successfully" -ForegroundColor Green
+            $success = $true
+            break
+        } catch {
+            Write-Host "  Attempt $($i): Dismount-WindowsImage failed ($($_.Exception.Message)). Retrying in 5 seconds..." -ForegroundColor Yellow
+            
+            [System.GC]::Collect()
+            [System.GC]::WaitForPendingFinalizers()
+            [System.GC]::Collect()
+            Start-Sleep -Seconds 5
+            
+            if ($i -ge 3) {
+                Write-Host "  Attempting direct dism.exe unmount command..." -ForegroundColor Cyan
+                $saveFlag = if ($Save) { '/commit' } else { '/discard' }
+                $dismRes = & dism.exe /English /unmount-image "/mountdir:$Path" $saveFlag 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "✓ Direct dism.exe unmount succeeded!" -ForegroundColor Green
+                    $success = $true
+                    break
+                } else {
+                    Write-Host "  Direct dism.exe unmount output: $dismRes" -ForegroundColor Yellow
+                }
+            }
+        }
+    }
+
+    if (-not $success) {
+        Write-Error "The directory could not be completely unmounted at $Path after multiple attempts."
+        & dism.exe /Cleanup-Wim 2>&1 | Out-Null
+    }
+    return $success
+}
+
+# Function to inject driver into mounted image
+function Add-DriverToImage {
+    param (
+        [string]$MountPath,
+        [string]$DriverPath,
+        [string]$ImageName
+    )
+    
+    # 1. Locate or auto-acquire IRST Driver folder
+    if (-not $DriverPath -or -not (Test-Path $DriverPath)) {
+        $projectIrstFolder = Join-Path $PSScriptRoot "IRST_Driver"
+        if (Test-Path $projectIrstFolder) {
+            Write-Host "Using IRST driver from project folder: $projectIrstFolder" -ForegroundColor Cyan
+            $DriverPath = $projectIrstFolder
+        } else {
+            # Check workspace root as secondary fallback
+            $workspaceIrstFolder = Join-Path $env:GITHUB_WORKSPACE "IRST_Driver"
+            if ($env:GITHUB_WORKSPACE -and (Test-Path $workspaceIrstFolder)) {
+                $DriverPath = $workspaceIrstFolder
+            } else {
+                Write-Host "IRST driver folder not found. Auto-downloading universal Intel RST VMD drivers..." -ForegroundColor Cyan
+                $tempIrstDir = Join-Path $env:TEMP "Universal_IRST_Driver"
+                try {
+                    if (-not (Test-Path $tempIrstDir)) { New-Item -ItemType Directory -Path $tempIrstDir -Force | Out-Null }
+                    # Download VMD driver package
+                    $vmdUrl = "https://raw.githubusercontent.com/namnguyen97x/tiny-auto-builder/main/IRST_Driver/iastorvd.inf_amd64_15c9ea6001a5206d/iaStorVD.inf"
+                    $sysUrl = "https://raw.githubusercontent.com/namnguyen97x/tiny-auto-builder/main/IRST_Driver/iastorvd.inf_amd64_15c9ea6001a5206d/iaStorVD.sys"
+                    $catUrl = "https://raw.githubusercontent.com/namnguyen97x/tiny-auto-builder/main/IRST_Driver/iastorvd.inf_amd64_15c9ea6001a5206d/iaStorVD.cat"
+                    Invoke-WebRequest -Uri $vmdUrl -OutFile (Join-Path $tempIrstDir "iaStorVD.inf") -UseBasicParsing -ErrorAction SilentlyContinue
+                    Invoke-WebRequest -Uri $sysUrl -OutFile (Join-Path $tempIrstDir "iaStorVD.sys") -UseBasicParsing -ErrorAction SilentlyContinue
+                    Invoke-WebRequest -Uri $catUrl -OutFile (Join-Path $tempIrstDir "iaStorVD.cat") -UseBasicParsing -ErrorAction SilentlyContinue
+                } catch {
+                    Write-Warning "Could not auto-download IRST fallback: $_"
+                }
+                if (Test-Path (Join-Path $tempIrstDir "iaStorVD.inf")) {
+                    $DriverPath = $tempIrstDir
+                } else {
+                    Write-Host "IRST driver path not provided and IRST_Driver folder not found, skipping driver injection." -ForegroundColor Yellow
+                    return
+                }
+            }
+        }
+    }
+    
+    Write-Host "Injecting IRST driver into $ImageName..." -ForegroundColor Cyan
+    Write-Host "Driver path: $DriverPath" -ForegroundColor Gray
+    
+    $infFiles = Get-ChildItem -Path $DriverPath -Filter "*.inf" -Recurse -ErrorAction SilentlyContinue
+    if (-not $infFiles) {
+        Write-Warning "No .inf files found in driver path: $DriverPath"
+        return
+    }
+    
+    # 2. Attempt fast recursive batch injection first
+    try {
+        $result = & dism /English /image:"$MountPath" /add-driver /driver:"$DriverPath" /recurse 2>&1
+        $outputString = $result -join "`n"
+        if ($LASTEXITCODE -eq 0 -and -not ($outputString | Select-String -Pattern "Error|Failed|failed" -Quiet)) {
+            Write-Host "✓ IRST drivers injected successfully into $ImageName" -ForegroundColor Green
+            return
+        }
+    } catch {
+        Write-Warning "Direct batch injection returned an error, trying subfolder fallback..."
+    }
+
+    # 3. Fallback to subfolder-by-subfolder injection if batch call failed
+    $driverFolders = Get-ChildItem -Path $DriverPath -Directory -ErrorAction SilentlyContinue | Where-Object {
+        (Get-ChildItem -Path $_.FullName -Filter "*.inf" -Recurse -ErrorAction SilentlyContinue).Count -gt 0
+    }
+    
+    if ($driverFolders.Count -gt 0) {
+        Write-Host "Injecting $($driverFolders.Count) driver subfolders into $ImageName..." -ForegroundColor Cyan
+        $successCount = 0
+        $failCount = 0
+        
+        foreach ($driverFolder in $driverFolders) {
+            try {
+                $result = & dism /English /image:"$MountPath" /add-driver /driver:"$($driverFolder.FullName)" /recurse 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    $successCount++
+                } else {
+                    $failCount++
+                }
+            } catch {
+                $failCount++
+            }
+        }
+        Write-Host "Driver injection completed: $successCount succeeded, $failCount failed" -ForegroundColor $(if ($failCount -eq 0) { "Green" } else { "Yellow" })
+    }
+}
+
+if ($NonInteractive) {
+    Write-Host "Non-interactive mode enabled. Continuing automatically..."
+    $input = 'y'
+} else {
+    Write-Host "Do you want to continue? (y/n)"
+    $input = Read-Host
+}
+
+if ($input -eq 'y') {
+    Write-Host "Off we go..."
+    if (-not $NonInteractive) {
+        Start-Sleep -Seconds 3
+        Clear-Host
+    }
+
+$mainOSDrive = $env:SystemDrive
+$hostArchitecture = $Env:PROCESSOR_ARCHITECTURE
+New-Item -ItemType Directory -Force -Path "$mainOSDrive\tiny11\sources" >null
+
+# Use ISO parameter if provided, otherwise prompt
+if ($ISO) {
+    $DriveLetter = $ISO + ":"
+    Write-Host "Using ISO drive from parameter: $DriveLetter"
+} else {
+    if ($NonInteractive) {
+        Write-Error "ISO parameter is required in non-interactive mode. Please provide -ISO parameter."
+        exit 1
+    }
+    $DriveLetter = Read-Host "Please enter the drive letter for the Windows 11 image"
+    $DriveLetter = $DriveLetter + ":"
+}
+
+if ((Test-Path "$DriveLetter\sources\boot.wim") -eq $false -or (Test-Path "$DriveLetter\sources\install.wim") -eq $false) {
+    if ((Test-Path "$DriveLetter\sources\install.esd") -eq $true) {
+        Write-Host "Found install.esd, converting to install.wim..."
+        $esdInfoOutput = & 'dism' '/English' "/Get-WimInfo" "/wimfile:$DriveLetter\sources\install.esd"
+        $esdInfoOutput | Write-Host
+        
+        if ($NonInteractive) {
+            # Auto-detect edition based on VersionSelector
+            Write-Host "Auto-detecting edition based on VersionSelector: $VersionSelector"
+            $wimInfo = $esdInfoOutput
+            
+            # Parse WIM info to find target editions
+            $index = $null
+            $targetEditions = @()
+            $currentIndex = $null
+            $currentName = $null
+            
+            foreach ($line in $wimInfo) {
+                if ($line -match 'Index : (\d+)') {
+                    $currentIndex = [int]$Matches[1]
+                } elseif ($line -match 'Name : (.+)') {
+                    $currentName = $Matches[1].Trim()
+                    if ($currentIndex -and $currentName) {
+                        $match = $false
+                        $priority = 999
+                        
+                        switch ($VersionSelector) {
+                            'Auto' {
+                                # Auto mode: prefer Pro editions
+                                if ($currentName -like '*Pro*' -and $currentName -notlike '*Home*') {
+                                    $match = $true
+                                    if ($currentName -eq 'Windows 11 Pro') {
+                                        $priority = 1
+                                    } elseif ($currentName -like '*Pro for Workstations*' -and $currentName -notlike '*N*') {
+                                        $priority = 2
+                                    } elseif ($currentName -like '*Pro Education*' -and $currentName -notlike '*N*') {
+                                        $priority = 3
+                                    } elseif ($currentName -like '*Pro*' -and $currentName -notlike '*N*') {
+                                        $priority = 4
+                                    } else {
+                                        $priority = 5
+                                    }
+                                }
+                            }
+                            'Pro' {
+                                # Pro mode: find exact Windows 11 Pro
+                                if ($currentName -eq 'Windows 11 Pro') {
+                                    $match = $true
+                                    $priority = 1
+                                }
+                            }
+                            'Home' {
+                                # Home mode: find Windows 11 Home (non-N)
+                                if ($currentName -like '*Home*' -and $currentName -notlike '*N*' -and $currentName -notlike '*Pro*') {
+                                    $match = $true
+                                    if ($currentName -eq 'Windows 11 Home') {
+                                        $priority = 1
+                                    } else {
+                                        $priority = 2
+                                    }
+                                }
+                            }
+                            'ProWorkstations' {
+                                # ProWorkstations mode: find Pro for Workstations
+                                if ($currentName -like '*Pro for Workstations*' -and $currentName -notlike '*N*') {
+                                    $match = $true
+                                    $priority = 1
+                                }
+                            }
+                        }
+                        
+                        if ($match) {
+                            $targetEditions += @{
+                                Index = $currentIndex
+                                Name = $currentName
+                                Priority = $priority
+                            }
+                        }
+                        $currentIndex = $null
+                        $currentName = $null
+                    }
+                }
+            }
+            
+            if ($targetEditions.Count -gt 0) {
+                # Sort by priority and select the best one
+                $bestEdition = $targetEditions | Sort-Object Priority | Select-Object -First 1
+                $index = $bestEdition.Index
+                Write-Host "Found edition: $($bestEdition.Name) (Index: $index)" -ForegroundColor Green
+            } else {
+                # Fallback to index 1 if not found
+                $index = 1
+                Write-Host "Requested edition not found, using default index: $index" -ForegroundColor Yellow
+            }
+        } else {
+            $index = Read-Host "Please enter the image index"
+        }
+        
+        Write-Host ' '
+        Write-Host 'Converting install.esd to install.wim. This may take a while...'
+        & 'DISM' /Export-Image /SourceImageFile:"$DriveLetter\sources\install.esd" /SourceIndex:$index /DestinationImageFile:"$mainOSDrive\tiny11\sources\install.wim" /Compress:max /CheckIntegrity
+    } else {
+        Write-Host "Can't find Windows OS Installation files in the specified Drive Letter.."
+        Write-Host "Please enter the correct DVD Drive Letter.."
+        exit
+    }
+}
+
+Write-Host "Copying Windows image..."
+Copy-Item -Path "$DriveLetter\*" -Destination "$mainOSDrive\tiny11" -Recurse -Force > null
+
+# Remove install.esd if it exists (we only need install.wim)
+if (Test-Path "$mainOSDrive\tiny11\sources\install.esd") {
+    Set-ItemProperty -Path "$mainOSDrive\tiny11\sources\install.esd" -Name IsReadOnly -Value $false > $null 2>&1
+    Remove-Item "$mainOSDrive\tiny11\sources\install.esd" -Force > $null 2>&1
+    Write-Host "Removed install.esd (using install.wim instead)"
+}
+
+Write-Host "Copy complete!"
+if (-not $NonInteractive) {
+    Start-Sleep -Seconds 2
+    Clear-Host
+}
+Write-Host "Getting image information:"
+$wimInfoOutput = & 'dism' '/English' "/Get-WimInfo" "/wimfile:$mainOSDrive\tiny11\sources\install.wim"
+$wimInfoOutput | Write-Host
+
+if ($NonInteractive) {
+    # Auto-detect edition based on VersionSelector
+    Write-Host "Auto-detecting edition based on VersionSelector: $VersionSelector"
+    $wimInfo = $wimInfoOutput
+    
+    # Parse WIM info to find target editions
+    $index = $null
+    $targetEditions = @()
+    $currentIndex = $null
+    $currentName = $null
+    
+    foreach ($line in $wimInfo) {
+        if ($line -match 'Index : (\d+)') {
+            $currentIndex = [int]$Matches[1]
+        } elseif ($line -match 'Name : (.+)') {
+            $currentName = $Matches[1].Trim()
+            if ($currentIndex -and $currentName) {
+                $match = $false
+                $priority = 999
+                
+                switch ($VersionSelector) {
+                    'Auto' {
+                        # Auto mode: prefer Pro editions
+                        if ($currentName -like '*Pro*' -and $currentName -notlike '*Home*') {
+                            $match = $true
+                            if ($currentName -eq 'Windows 11 Pro') {
+                                $priority = 1
+                            } elseif ($currentName -like '*Pro for Workstations*' -and $currentName -notlike '*N*') {
+                                $priority = 2
+                            } elseif ($currentName -like '*Pro Education*' -and $currentName -notlike '*N*') {
+                                $priority = 3
+                            } elseif ($currentName -like '*Pro*' -and $currentName -notlike '*N*') {
+                                $priority = 4
+                            } else {
+                                $priority = 5
+                            }
+                        }
+                    }
+                    'Pro' {
+                        # Pro mode: find exact Windows 11 Pro
+                        if ($currentName -eq 'Windows 11 Pro') {
+                            $match = $true
+                            $priority = 1
+                        }
+                    }
+                    'Home' {
+                        # Home mode: find Windows 11 Home (non-N)
+                        if ($currentName -like '*Home*' -and $currentName -notlike '*N*' -and $currentName -notlike '*Pro*') {
+                            $match = $true
+                            if ($currentName -eq 'Windows 11 Home') {
+                                $priority = 1
+                            } else {
+                                $priority = 2
+                            }
+                        }
+                    }
+                    'ProWorkstations' {
+                        # ProWorkstations mode: find Pro for Workstations
+                        if ($currentName -like '*Pro for Workstations*' -and $currentName -notlike '*N*') {
+                            $match = $true
+                            $priority = 1
+                        }
+                    }
+                }
+                
+                if ($match) {
+                    $targetEditions += @{
+                        Index = $currentIndex
+                        Name = $currentName
+                        Priority = $priority
+                    }
+                }
+                $currentIndex = $null
+                $currentName = $null
+            }
+        }
+    }
+    
+    if ($targetEditions.Count -gt 0) {
+        # Sort by priority and select the best one
+        $bestEdition = $targetEditions | Sort-Object Priority | Select-Object -First 1
+        $index = $bestEdition.Index
+        Write-Host "Found edition: $($bestEdition.Name) (Index: $index)" -ForegroundColor Green
+    } else {
+        # Fallback to index 1 if not found
+        $index = 1
+        Write-Host "Requested edition not found, using default index: $index" -ForegroundColor Yellow
+    }
+} else {
+    $index = Read-Host "Please enter the image index"
+}
+Write-Host "Mounting Windows image. This may take a while."
+$wimFilePath = "$mainOSDrive\tiny11\sources\install.wim" 
+& takeown "/F" $wimFilePath 
+& icacls $wimFilePath "/grant" "$($adminGroup.Value):(F)"
+try {
+    Set-ItemProperty -Path $wimFilePath -Name IsReadOnly -Value $false -ErrorAction Stop
+} catch {
+    # This block will catch the error and suppress it.
+    Write-Warning "$wimFilePath IsReadOnly property may not be settable (continuing...)"
+}
+New-Item -ItemType Directory -Force -Path "$mainOSDrive\scratchdir" > $null
+& dism /English "/mount-image" "/imagefile:$mainOSDrive\tiny11\sources\install.wim" "/index:$index" "/mountdir:$mainOSDrive\scratchdir"
+
+$imageIntl = & dism /English /Get-Intl "/Image:$mainOSDrive\scratchdir"
+$languageLine = $imageIntl -split '\n' | Where-Object { $_ -match 'Default system UI language : ([a-zA-Z]{2}-[a-zA-Z]{2})' }
+
+if ($languageLine) {
+    $languageCode = $Matches[1]
+    Write-Host "Default system UI language code: $languageCode"
+} else {
+    Write-Host "Default system UI language code not found."
+}
+
+$imageInfo = & 'dism' '/English' '/Get-WimInfo' "/wimFile:$($env:SystemDrive)\tiny11\sources\install.wim" "/index:$index"
+$lines = $imageInfo -split '\r?\n'
+
+foreach ($line in $lines) {
+    if ($line -like '*Architecture : *') {
+        $architecture = $line -replace 'Architecture : ',''
+        # If the architecture is x64, replace it with amd64
+        if ($architecture -eq 'x64') {
+            $architecture = 'amd64'
+        }
+        Write-Host "Architecture: $architecture"
+        break
+    }
+}
+
+if (-not $architecture) {
+    Write-Host "Architecture information not found."
+}
+
+Write-Host "Mounting complete! Performing removal of applications..."
+
+# Sử dụng debloater module nếu được enable
+if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
+    Write-Host "Using integrated debloater from Windows-ISO-Debloater..."
+    Remove-DebloatPackages -MountPath "$mainOSDrive\scratchdir" `
+        -RemoveAppx:($RemoveAppx -eq 'yes') `
+        -RemoveCapabilities:($RemoveCapabilities -eq 'yes') `
+        -RemoveWindowsPackages:($RemoveWindowsPackages -eq 'yes') `
+        -LanguageCode $languageCode `
+        -RemoveStore:($RemoveStore -eq 'yes') `
+        -RemoveAI:($RemoveAI -eq 'yes') `
+        -RemoveDefender:($RemoveDefender -eq 'yes')
+    
+    Remove-DebloatFiles -MountPath "$mainOSDrive\scratchdir" `
+        -RemoveEdge:($RemoveEdge -eq 'yes') `
+        -RemoveOneDrive:($RemoveOneDrive -eq 'yes') `
+        -Architecture $architecture
+} else {
+    # Fallback to original method
+    Write-Host "Using original package removal method..."
+    $packages = & 'dism' '/English' "/image:$mainOSDrive\scratchdir" '/Get-ProvisionedAppxPackages' |
+        ForEach-Object {
+            if ($_ -match 'PackageName : (.*)') {
+                $matches[1]
+            }
+        }
+    $packagePrefixes = 'Clipchamp.Clipchamp_', 'Microsoft.BingNews_', 'Microsoft.BingWeather_', 'Microsoft.BingSports_', 'Microsoft.BingFinance_', 'Microsoft.GamingApp_', 'Microsoft.GetHelp_', 'Microsoft.Getstarted_', 'Microsoft.MicrosoftOfficeHub_', 'Microsoft.MicrosoftSolitaireCollection_', 'Microsoft.Microsoft3DViewer_', 'Microsoft.MicrosoftStickyNotes_', 'Microsoft.People_', 'Microsoft.PowerAutomateDesktop_', 'Microsoft.Todos_', 'Microsoft.WindowsAlarms_', 'microsoft.windowscommunicationsapps_', 'Microsoft.WindowsFeedbackHub_', 'Microsoft.WindowsMaps_', 'Microsoft.WindowsSoundRecorder_', 'Microsoft.WindowsCamera_', 'Microsoft.WindowsCalculator_', 'Microsoft.WindowsNotepad_', 'Microsoft.WindowsPaint_', 'Microsoft.WindowsTerminal_', 'Microsoft.WindowsTips_', 'Microsoft.OneDrive_', 'Microsoft.OneDriveSync_', 'Microsoft.ScreenSketch_', 'Microsoft.Windows.Search.Cortana_', 'Microsoft.SkypeApp_', 'Microsoft.Office.OneNote_', 'Microsoft.Xbox.TCUI_', 'Microsoft.XboxGamingOverlay_', 'Microsoft.XboxGameOverlay_', 'Microsoft.XboxSpeechToTextOverlay_', 'Microsoft.XboxApp_', 'Microsoft.XboxIdentityProvider_', 'Microsoft.YourPhone_', 'Microsoft.ZuneMusic_', 'Microsoft.ZuneVideo_', 'MicrosoftCorporationII.MicrosoftFamily_', 'MicrosoftCorporationII.QuickAssist_', 'MicrosoftTeams_', 'MSTeams_', 'Microsoft.OutlookForWindows_', 'Microsoft.Windows.Teams_'
+    
+    # Honor RemoveAI and RemoveStore parameters - filter out AI/Copilot and Store packages if they should be kept
+    if ($RemoveAI -eq 'no') {
+        # Remove AI/Copilot packages from removal list
+        $packagePrefixes = $packagePrefixes | Where-Object { $_ -notlike '*549981C3F5F10*' -and $_ -notlike '*Copilot*' }
+    } else {
+        # Add AI/Copilot packages if RemoveAI = yes
+        $packagePrefixes += 'Microsoft.549981C3F5F10_', 'Microsoft.Windows.Copilot', 'Microsoft.Copilot_'
+    }
+    
+    if ($RemoveStore -eq 'no') {
+        # Filter out Store packages (they will be kept)
+        # Note: Store packages are not in packagePrefixes list, they're handled separately
+        Write-Host "Keeping Microsoft Store (RemoveStore=no)" -ForegroundColor Green
+    }
+
+    $packagesToRemove = $packages | Where-Object {
+        $packageName = $_
+        $shouldRemove = $false
+        
+        # Check if package matches any prefix
+        foreach ($prefix in $packagePrefixes) {
+            if ($packageName -like "$prefix*") {
+                $shouldRemove = $true
+                break
+            }
+        }
+        
+        # Honor RemoveAI parameter - keep AI/Copilot packages if RemoveAI = no
+        if ($RemoveAI -eq 'no') {
+            if ($packageName -like '*Copilot*' -or $packageName -like '*549981C3F5F10*') {
+                $shouldRemove = $false
+                Write-Host "  Keeping AI package: $packageName" -ForegroundColor Gray
+            }
+        }
+        
+        # Honor RemoveStore parameter - keep Store packages if RemoveStore = no
+        if ($RemoveStore -eq 'no') {
+            if ($packageName -like '*WindowsStore*' -or $packageName -like '*StorePurchaseApp*' -or $packageName -like '*Store.Engagement*') {
+                $shouldRemove = $false
+                Write-Host "  Keeping Store package: $packageName" -ForegroundColor Gray
+            }
+        }
+        
+        $shouldRemove
+    }
+    foreach ($package in $packagesToRemove) {
+        write-host "Removing $package :"
+        $result = & 'dism' '/English' "/image:$mainOSDrive\scratchdir" '/Remove-ProvisionedAppxPackage' "/PackageName:$package" 2>&1
+        if ($LASTEXITCODE -ne 0 -or ($result | Select-String -Pattern "Error|failed|not found" -Quiet)) {
+            Write-Host "  Warning: Failed to remove $package (continuing...)" -ForegroundColor Yellow
+        }
+    }
+
+    Write-Host "Removing of system apps complete! Now proceeding to removal of system packages..."
+    
+    $scratchDir = "$mainOSDrive\scratchdir"
+    $packagePatterns = @(
+        "Microsoft-Windows-InternetExplorer-Optional-Package~31bf3856ad364e35",
+        "Microsoft-Windows-Kernel-LA57-FoD-Package~31bf3856ad364e35~amd64",
+        "Microsoft-Windows-LanguageFeatures-Handwriting-$languageCode-Package~31bf3856ad364e35",
+        "Microsoft-Windows-LanguageFeatures-OCR-$languageCode-Package~31bf3856ad364e35",
+        "Microsoft-Windows-LanguageFeatures-Speech-$languageCode-Package~31bf3856ad364e35",
+        "Microsoft-Windows-LanguageFeatures-TextToSpeech-$languageCode-Package~31bf3856ad364e35",
+        "Microsoft-Windows-MediaPlayer-Package~31bf3856ad364e35",
+        "Microsoft-Windows-Wallpaper-Content-Extended-FoD-Package~31bf3856ad364e35",
+        "Microsoft-Windows-WordPad-FoD-Package~",
+        "Microsoft-Windows-TabletPCMath-Package~",
+        "Microsoft-Windows-StepsRecorder-Package~"
+    )
+    # Honor RemoveDefender parameter from workflow
+    if ($RemoveDefender -eq 'yes') {
+        $packagePatterns += "Windows-Defender-Client-Package~31bf3856ad364e35~"
+    } else {
+        Write-Host "Keeping Windows Defender (RemoveDefender=no)"
+    }
+
+    # Get all packages
+    $allPackages = & dism /image:$scratchDir /Get-Packages /Format:Table
+    $allPackages = $allPackages -split "`n" | Select-Object -Skip 1
+
+    foreach ($packagePattern in $packagePatterns) {
+        # Filter the packages to remove
+        $packagesToRemove = $allPackages | Where-Object { $_ -like "$packagePattern*" }
+
+    foreach ($package in $packagesToRemove) {
+        # Extract the package identity
+        $packageIdentity = ($package -split "\s+")[0]
+
+        Write-Host "Removing $packageIdentity..."
+        try {
+            $result = & dism /image:$scratchDir /Remove-Package /PackageName:$packageIdentity 2>&1
+            $outputString = $result -join "`n"
+            
+            if ($LASTEXITCODE -ne 0 -or ($outputString | Select-String -Pattern "Removal failed|Error|failed|cannot|not found" -Quiet)) {
+                Write-Host "  Warning: Failed to remove $packageIdentity (continuing...)" -ForegroundColor Yellow
+            } else {
+                Write-Host "  ✓ Removed successfully" -ForegroundColor Green
+            }
+        } catch {
+            Write-Host "  Warning: Exception removing $packageIdentity - $($_.Exception.Message) (continuing...)" -ForegroundColor Yellow
+        }
+    }
+    }
+}
+
+Start-Sleep -Seconds 1
+if (-not $NonInteractive) {
+    try {
+        Clear-Host
+    } catch {
+        # Ignore Clear-Host errors in non-interactive environments
+    }
+}
+
+# Note: .NET Framework 3.5 will be enabled AFTER Windows Update services are configured
+# This ensures Windows Update services are available for .NET 3.5 installation in Windows 11 25H2
+# Chỉ chạy method cũ nếu debloater không được enable
+if ($EnableDebloat -ne 'yes' -or -not (Get-Module -Name tiny11-debloater)) {
+    # Honor RemoveEdge parameter from workflow
+    if ($RemoveEdge -eq 'yes') {
+        Write-Host "Removing Edge:"
+        # Use parallel processing for Edge removal if available
+        $parallelHelperPath = Join-Path $PSScriptRoot "parallel-helper.psm1"
+        if (Test-Path $parallelHelperPath) {
+            Import-Module $parallelHelperPath -Force -ErrorAction SilentlyContinue
+            if (Get-Module -Name parallel-helper) {
+                Write-Host "Using parallel processing for Edge removal..." -ForegroundColor Cyan
+                $edgePaths = @(
+                    "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\Edge",
+                    "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeUpdate",
+                    "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeCore"
+                )
+                Remove-ItemsParallel -Paths $edgePaths -Recurse -ErrorAction SilentlyContinue | Out-Null
+            } else {
+                # Fallback to sequential removal
+                Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\Edge" -Recurse -Force >null
+                Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeUpdate" -Recurse -Force >null
+                Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeCore" -Recurse -Force >null
+            }
+        } else {
+            # Fallback to sequential removal
+            Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\Edge" -Recurse -Force >null
+            Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeUpdate" -Recurse -Force >null
+            Remove-Item -Path "$mainOSDrive\scratchdir\Program Files (x86)\Microsoft\EdgeCore" -Recurse -Force >null
+        }
+        
+        if ($architecture -eq 'amd64') {
+            $folderPath = Get-ChildItem -Path "$mainOSDrive\scratchdir\Windows\WinSxS" -Filter "amd64_microsoft-edge-webview_31bf3856ad364e35*" -Directory | Select-Object -ExpandProperty FullName
+
+            if ($folderPath) {
+                & 'takeown' '/f' $folderPath '/r' >null
+                & icacls $folderPath  "/grant" "$($adminGroup.Value):(F)" '/T' '/C' >null
+                Remove-Item -Path $folderPath -Recurse -Force >null
+            } else {
+                Write-Host "Folder not found."
+            }
+        } elseif ($architecture -eq 'arm64') {
+            $folderPath = Get-ChildItem -Path "$mainOSDrive\scratchdir\Windows\WinSxS" -Filter "arm64_microsoft-edge-webview_31bf3856ad364e35*" -Directory | Select-Object -ExpandProperty FullName >null
+
+            if ($folderPath) {
+                & 'takeown' '/f' $folderPath '/r'>null
+                & icacls $folderPath  "/grant" "$($adminGroup.Value):(F)" '/T' '/C' >null
+                Remove-Item -Path $folderPath -Recurse -Force >null
+            } else {
+                Write-Host "Folder not found."
+            }
+        } else {
+            Write-Host "Unknown architecture: $architecture"
+        }
+        & 'takeown' '/f' "$mainOSDrive\scratchdir\Windows\System32\Microsoft-Edge-Webview" '/r'
+        & 'icacls' "$mainOSDrive\scratchdir\Windows\System32\Microsoft-Edge-Webview" '/grant' "$($adminGroup.Value):(F)" '/T' '/C'
+        Remove-Item -Path "$mainOSDrive\scratchdir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force
+    } else {
+        Write-Host "Keeping Edge (RemoveEdge=no)"
+    }
+    
+# Keep WinRE.wim to preserve "Previous Version of Setup" option in Windows Setup
+# Removing WinRE.wim causes the "Previous Version of Setup" option to disappear
+# Write-Host "Removing WinRE"
+# & 'takeown' '/f' "$mainOSDrive\scratchdir\Windows\System32\Recovery" '/r'
+# & 'icacls' "$mainOSDrive\scratchdir\Windows\System32\Recovery" '/grant' 'Administrators:F' '/T' '/C'
+# Remove-Item -Path "$mainOSDrive\scratchdir\Windows\System32\Recovery\winre.wim" -Recurse -Force
+# New-Item -Path "$mainOSDrive\scratchdir\Windows\System32\Recovery\winre.wim" -ItemType File -Force
+    
+    Write-Host "Removing OneDrive:"
+    & 'takeown' '/f' "$mainOSDrive\scratchdir\Windows\System32\OneDriveSetup.exe" >null
+    & 'icacls' "$mainOSDrive\scratchdir\Windows\System32\OneDriveSetup.exe" '/grant' "$($adminGroup.Value):(F)" '/T' '/C' >null
+    Remove-Item -Path "$mainOSDrive\scratchdir\Windows\System32\OneDriveSetup.exe" -Force >null
+    
+    Write-Host "Removing OneDrive Start Menu shortcuts:"
+    $startMenuPaths = @(
+        "$mainOSDrive\scratchdir\ProgramData\Microsoft\Windows\Start Menu\Programs\OneDrive.lnk",
+        "$mainOSDrive\scratchdir\ProgramData\Microsoft\Windows\Start Menu\Programs\OneDrive",
+        "$mainOSDrive\scratchdir\Users\Default\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\OneDrive.lnk",
+        "$mainOSDrive\scratchdir\Users\Default\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\OneDrive"
+    )
+    
+    foreach ($shortcutPath in $startMenuPaths) {
+        if (Test-Path $shortcutPath) {
+            & 'takeown' '/f' $shortcutPath '/r' >null
+            & 'icacls' $shortcutPath '/grant' "$($adminGroup.Value):(F)" '/T' '/C' >null
+            Remove-Item -Path $shortcutPath -Recurse -Force -ErrorAction SilentlyContinue >null
+        }
+    }
+    
+    # Remove Start Menu shortcuts for debloated apps
+    Write-Host "Removing Start Menu shortcuts for debloated apps..."
+    $startMenuBasePaths = @(
+        "$mainOSDrive\scratchdir\ProgramData\Microsoft\Windows\Start Menu\Programs",
+        "$mainOSDrive\scratchdir\Users\Default\AppData\Roaming\Microsoft\Windows\Start Menu\Programs"
+    )
+    
+    # Apps to remove shortcuts for based on debloat parameters
+    $shortcutsToRemove = @()
+    
+    # Microsoft Edge shortcuts (if RemoveEdge=yes)
+    if ($RemoveEdge -eq 'yes') {
+        $shortcutsToRemove += "Microsoft Edge.lnk"
+        $shortcutsToRemove += "Microsoft Edge"
+        $shortcutsToRemove += "Microsoft Edge Update.lnk"
+        $shortcutsToRemove += "Microsoft Edge Update"
+        Write-Host "  Removing Edge shortcuts..."
+    }
+    
+    # Microsoft Store shortcuts (if RemoveStore=yes)
+    if ($RemoveStore -eq 'yes') {
+        $shortcutsToRemove += "Microsoft Store.lnk"
+        $shortcutsToRemove += "Microsoft Store"
+        Write-Host "  Removing Store shortcuts..."
+    }
+    
+    # Remove shortcuts from both Start Menu locations
+    foreach ($basePath in $startMenuBasePaths) {
+        if (Test-Path $basePath) {
+            foreach ($shortcutName in $shortcutsToRemove) {
+                $shortcutPath = Join-Path $basePath $shortcutName
+                if (Test-Path $shortcutPath) {
+                    try {
+                        & 'takeown' '/f' $shortcutPath '/r' >null
+                        & 'icacls' $shortcutPath '/grant' "$($adminGroup.Value):(F)" '/T' '/C' >null
+                        Remove-Item -Path $shortcutPath -Recurse -Force -ErrorAction SilentlyContinue >null
+                    } catch {
+                        # Silently continue if shortcut removal fails
+                    }
+                }
+            }
+            
+            # Also remove any shortcuts containing "Microsoft Edge" or "Microsoft Store" in their names
+            if ($RemoveEdge -eq 'yes') {
+                Get-ChildItem -Path $basePath -Filter "*Edge*" -ErrorAction SilentlyContinue | ForEach-Object {
+                    try {
+                        & 'takeown' '/f' $_.FullName '/r' >null
+                        & 'icacls' $_.FullName '/grant' "$($adminGroup.Value):(F)" '/T' '/C' >null
+                        Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue >null
+                    } catch { }
+                }
+            }
+            
+            if ($RemoveStore -eq 'yes') {
+                Get-ChildItem -Path $basePath -Filter "*Store*" -ErrorAction SilentlyContinue | ForEach-Object {
+                    try {
+                        & 'takeown' '/f' $_.FullName '/r' >null
+                        & 'icacls' $_.FullName '/grant' "$($adminGroup.Value):(F)" '/T' '/C' >null
+                        Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue >null
+                    } catch { }
+                }
+            }
+        }
+    }
+    Write-Host "Start Menu shortcuts cleanup complete."
+}
+
+Write-Host "Removal complete!"
+if (-not $NonInteractive) {
+    Start-Sleep -Seconds 2
+    try {
+        Clear-Host
+    } catch {
+        # Ignore Clear-Host errors in non-interactive environments
+    }
+}
+Write-Host "Taking ownership of the WinSxS folder. This might take a while..."
+& 'takeown' '/f' "$mainOSDrive\scratchdir\Windows\WinSxS" '/r'
+& 'icacls' "$mainOSDrive\scratchdir\Windows\WinSxS" '/grant' "$($adminGroup.Value):(F)" '/T' '/C'
+Write-host "Complete!"
+if (-not $NonInteractive) {
+    Start-Sleep -Seconds 2
+    try {
+        Clear-Host
+    } catch {
+        # Ignore Clear-Host errors in non-interactive environments
+    }
+}
+Write-Host "Preparing..."
+$folderPath = Join-Path -Path $mainOSDrive -ChildPath "\scratchdir\Windows\WinSxS_edit"
+$sourceDirectory = "$mainOSDrive\scratchdir\Windows\WinSxS"
+$destinationDirectory = "$mainOSDrive\scratchdir\Windows\WinSxS_edit"
+New-Item -Path $folderPath -ItemType Directory
+if ($architecture -eq "amd64") {
+   $dirsToCopy = @(
+        "x86_microsoft.windows.common-controls_6595b64144ccf1df_*",
+        "x86_microsoft.windows.gdiplus_6595b64144ccf1df_*",    
+        "x86_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
+        "x86_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
+        "x86_microsoft-windows-s..ngstack-onecorebase_31bf3856ad364e35_*",
+        "x86_microsoft-windows-s..stack-termsrv-extra_31bf3856ad364e35_*",
+        "x86_microsoft-windows-servicingstack_31bf3856ad364e35_*",
+        "x86_microsoft-windows-servicingstack-inetsrv_*",
+        "x86_microsoft-windows-servicingstack-onecore_*",
+        "amd64_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
+        "amd64_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
+        "amd64_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*",
+        "amd64_microsoft.windows.common-controls_6595b64144ccf1df_*",
+        "amd64_microsoft.windows.gdiplus_6595b64144ccf1df_*",
+        "amd64_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
+        "amd64_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
+        "amd64_microsoft-windows-s..stack-inetsrv-extra_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-s..stack-msg.resources_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-s..stack-termsrv-extra_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-servicingstack_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-servicingstack-inetsrv_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-servicingstack-msg_31bf3856ad364e35_*",
+        "amd64_microsoft-windows-servicingstack-onecore_31bf3856ad364e35_*",
+        "Catalogs",
+        "FileMaps",
+        "Fusion",
+        "InstallTemp",
+        "Manifests",
+        "x86_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
+        "x86_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
+        "x86_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*",
+        "x86_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*"
+    )
+ # Copy each directory
+   foreach ($dir in $dirsToCopy) {
+        $sourceDirs = Get-ChildItem -Path $sourceDirectory -Filter $dir -Directory
+        foreach ($sourceDir in $sourceDirs) {
+            $destDir = Join-Path -Path $destinationDirectory -ChildPath $sourceDir.Name
+            Write-Host "Copying $sourceDir.FullName to $destDir"
+            Copy-Item -Path $sourceDir.FullName -Destination $destDir -Recurse -Force
+        }
+    }
+}
+ elseif ($architecture -eq "arm64") {
+    # Specify the list of files to copy
+     $dirsToCopy = @(
+        "arm64_microsoft-windows-servicingstack-onecore_31bf3856ad364e35_*",
+        "Catalogs",
+        "FileMaps",
+        "Fusion",
+        "InstallTemp",
+        "Manifests",
+        "SettingsManifests",
+        "Temp",
+        "x86_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
+        "x86_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
+        "x86_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*",
+        "x86_microsoft.windows.common-controls_6595b64144ccf1df_*",
+        "x86_microsoft.windows.gdiplus_6595b64144ccf1df_*",
+        "x86_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
+        "x86_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
+        "arm_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*",
+        "arm_microsoft.windows.common-controls_6595b64144ccf1df_*",
+        "arm_microsoft.windows.gdiplus_6595b64144ccf1df_*",
+        "arm_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
+        "arm_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
+        "arm64_microsoft.vc80.crt_1fc8b3b9a1e18e3b_*",
+        "arm64_microsoft.vc90.crt_1fc8b3b9a1e18e3b_*",
+        "arm64_microsoft.windows.c..-controls.resources_6595b64144ccf1df_*",
+        "arm64_microsoft.windows.common-controls_6595b64144ccf1df_*",
+        "arm64_microsoft.windows.gdiplus_6595b64144ccf1df_*",
+        "arm64_microsoft.windows.i..utomation.proxystub_6595b64144ccf1df_*",
+        "arm64_microsoft.windows.isolationautomation_6595b64144ccf1df_*",
+        "arm64_microsoft-windows-servicing-adm_31bf3856ad364e35_*",
+        "arm64_microsoft-windows-servicingcommon_31bf3856ad364e35_*",
+        "arm64_microsoft-windows-servicing-onecore-uapi_31bf3856ad364e35_*",
+        "arm64_microsoft-windows-servicingstack_31bf3856ad364e35_*",
+        "arm64_microsoft-windows-servicingstack-inetsrv_31bf3856ad364e35_*",
+        "arm64_microsoft-windows-servicingstack-msg_31bf3856ad364e35_*"
+    )
+}
+foreach ($dir in $dirsToCopy) {
+        $sourceDirs = Get-ChildItem -Path $sourceDirectory -Filter $dir -Directory
+        foreach ($sourceDir in $sourceDirs) {
+            $destDir = Join-Path -Path $destinationDirectory -ChildPath $sourceDir.Name
+            Write-Host "Copying $sourceDir.FullName to $destDir"
+            Copy-Item -Path $sourceDir.FullName -Destination $destDir -Recurse -Force
+        }
+    }  
+
+
+Write-Host "Deleting WinSxS. This may take a while..."
+        Remove-Item -Path $mainOSDrive\scratchdir\Windows\WinSxS -Recurse -Force
+
+Rename-Item -Path $mainOSDrive\scratchdir\Windows\WinSxS_edit -NewName $mainOSDrive\scratchdir\Windows\WinSxS
+Write-Host "Complete!"
+
+Write-Host "Loading registry..."
+reg load HKLM\zCOMPONENTS $mainOSDrive\scratchdir\Windows\System32\config\COMPONENTS | Out-Null
+reg load HKLM\zDEFAULT $mainOSDrive\scratchdir\Windows\System32\config\default | Out-Null
+reg load HKLM\zNTUSER $mainOSDrive\scratchdir\Users\Default\ntuser.dat | Out-Null
+reg load HKLM\zSOFTWARE $mainOSDrive\scratchdir\Windows\System32\config\SOFTWARE | Out-Null
+reg load HKLM\zSYSTEM $mainOSDrive\scratchdir\Windows\System32\config\SYSTEM | Out-Null
+Write-Host "Bypassing system requirements(on the system image):"
+& 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassCPUCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassRAMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassSecureBootCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassStorageCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassTPMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\MoSetup' '/v' 'AllowUpgradesWithUnsupportedTPMOrCPU' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+Write-Host "Disabling Sponsored Apps:"
+& 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'OemPreInstalledAppsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'PreInstalledAppsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SilentInstalledAppsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableWindowsConsumerFeatures' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'ContentDeliveryAllowed' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\PolicyManager\current\device\Start' '/v' 'ConfigureStartPins' '/t' 'REG_SZ' '/d' '{"pinnedList": [{}]}' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'FeatureManagementEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'OemPreInstalledAppsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'PreInstalledAppsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'PreInstalledAppsEverEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SilentInstalledAppsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SoftLandingEnabled' '/t' 'REG_DWORD' '/d' '0' '/f'| Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContentEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContent-310093Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContent-338388Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContent-338389Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContent-338393Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContent-353694Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContent-353696Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SubscribedContent-338387Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'SystemPaneSuggestionsEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+
+Write-Host "Disabling Windows Spotlight and Lock Screen tips:"
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'RotatingLockScreenEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'RotatingLockScreenOverlayEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\PushToInstall' '/v' 'DisablePushToInstall' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\MRT' '/v' 'DontOfferThroughWUAU' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'delete' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\Subscriptions' '/f' | Out-Null
+& 'reg' 'delete' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SuggestedApps' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableConsumerAccountStateContent' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableCloudOptimizedContent' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+
+# Apply debloater registry tweaks nếu được enable
+if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
+    Write-Host "Applying debloater registry tweaks..."
+    Apply-DebloatRegistryTweaks -RegistryPrefix "HKLM\z" `
+        -DisableTelemetry:($DisableTelemetry -eq 'yes') `
+        -DisableSponsoredApps:($DisableSponsoredApps -eq 'yes') `
+        -DisableAds:($DisableAds -eq 'yes') `
+        -DisableBitlocker:$true `
+        -DisableOneDrive:($RemoveOneDrive -eq 'yes') `
+        -DisableGameDVR:$true `
+        -TweakOOBE:$true `
+        -DisableUselessJunks:$true
+}
+
+Write-Host "Enabling Local Accounts on OOBE (Windows 11 25H2+ compatible):"
+# BypassNRO no longer works from Windows 11 25H2+, use ms-cxh:localonly URI scheme instead
+& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' '/v' 'OOBELocalAccount' '/t' 'REG_SZ' '/d' 'start ms-cxh:localonly' '/f' | Out-Null
+# Keep BypassNRO for older Windows versions compatibility
+& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' '/v' 'BypassNRO' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+# Ensure Sysprep directory exists before copying autounattend.xml
+$sysprepDir = "$mainOSDrive\scratchdir\Windows\System32\Sysprep"
+if (-not (Test-Path $sysprepDir)) {
+    New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null
+}
+Copy-Item -Path "$PSScriptRoot\autounattend.xml" -Destination "$sysprepDir\autounattend.xml" -Force | Out-Null
+Write-Host "Disabling Reserved Storage:"
+& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager' '/v' 'ShippedWithReserves' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+Write-Host "Disabling BitLocker Device Encryption"
+& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Control\BitLocker' '/v' 'PreventDeviceEncryption' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+Write-Host "Disabling Chat icon:"
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat' '/v' 'ChatIcon' '/t' 'REG_DWORD' '/d' '3' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced' '/v' 'TaskbarMn' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+Write-Host "Disabling Search Highlights:"
+& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\SearchSettings' '/v' 'IsDynamicSearchBoxEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+
+Write-Host "Disabling Bing Search in Start Bar:"
+& 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Search' '/v' 'BingSearchEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+
+Write-Host "Disabling Auto Discovery:"
+# Ensure the registry path exists
+& 'reg' 'add' 'HKLM\zNTUSER\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell' '/v' 'FolderType' '/t' 'REG_SZ' '/d' 'NotSpecified' '/f' | Out-Null
+# Honor RemoveEdge parameter from workflow
+if ($RemoveEdge -eq 'yes') {
+    Write-Host "Removing Edge related registries"
+    reg delete "HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f | Out-Null
+    reg delete "HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update" /f | Out-Null
+}
+
+# Honor RemoveAI parameter from workflow - disable Copilot/AI
+if ($RemoveAI -eq 'yes') {
+    Write-Host "Disabling Copilot/AI..."
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsCopilot' '/v' 'TurnOffWindowsCopilot' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Edge' '/v' 'HubsSidebarEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer' '/v' 'DisableSearchBoxSuggestions' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+} else {
+    Write-Host "Keeping Copilot/AI enabled (RemoveAI=no)"
+}
+
+# Honor RemoveStore parameter from workflow - disable Store
+if ($RemoveStore -eq 'yes') {
+    Write-Host "Disabling Microsoft Store..."
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\WindowsStore' '/v' 'RemoveWindowsStore' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned' '/v' 'Microsoft.WindowsStore_8wekyb3d8bbwe' '/t' 'REG_SZ' '/d' '' '/f' | Out-Null
+} else {
+    Write-Host "Keeping Microsoft Store enabled (RemoveStore=no)"
+}
+
+Write-Host "Disabling OneDrive folder backup"
+& 'reg' 'add' "HKLM\zSOFTWARE\Policies\Microsoft\Windows\OneDrive" '/v' 'DisableFileSyncNGSC' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+Write-Host "Disabling Telemetry:"
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo' '/v' 'Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Privacy' '/v' 'TailoredExperiencesWithDiagnosticDataEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy' '/v' 'HasAccepted' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Input\TIPC' '/v' 'Enabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\InputPersonalization' '/v' 'RestrictImplicitInkCollection' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\InputPersonalization' '/v' 'RestrictImplicitTextCollection' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\InputPersonalization\TrainedDataStore' '/v' 'HarvestContacts' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Personalization\Settings' '/v' 'AcceptedPrivacyPolicy' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection' '/v' 'AllowTelemetry' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\dmwappushservice' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' | Out-Null
+Write-Host "Prevents installation or DevHome and Outlook:"
+& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate' '/v' 'workCompleted' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate' '/v' 'workCompleted' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+& 'reg' 'delete' 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate' '/f' | Out-Null
+& 'reg' 'delete' 'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\DevHomeUpdate' '/f' | Out-Null
+# Note: Copilot/AI disable is handled above based on RemoveAI parameter
+Write-Host "Prevents installation of Teams:"
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Teams' '/v' 'DisableInstallation' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+Write-Host "Prevent installation of New Outlook":
+& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail' '/v' 'PreventRun' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+$tasksPath = "$mainOSDrive\scratchdir\Windows\System32\Tasks"
+
+Write-Host "Deleting scheduled task definition files..."
+
+# Application Compatibility Appraiser
+Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser" -Force -ErrorAction SilentlyContinue
+
+# Customer Experience Improvement Program (removes the entire folder and all tasks within it)
+Remove-Item -Path "$tasksPath\Microsoft\Windows\Customer Experience Improvement Program" -Recurse -Force -ErrorAction SilentlyContinue
+
+# Program Data Updater
+Remove-Item -Path "$tasksPath\Microsoft\Windows\Application Experience\ProgramDataUpdater" -Force -ErrorAction SilentlyContinue
+
+# Chkdsk Proxy
+Remove-Item -Path "$tasksPath\Microsoft\Windows\Chkdsk\Proxy" -Force -ErrorAction SilentlyContinue
+
+# Windows Error Reporting (QueueReporting)
+Remove-Item -Path "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting" -Force -ErrorAction SilentlyContinue
+
+Write-Host "Task files have been deleted."
+# If Defender is kept, we need to allow Defender updates but can still disable OS updates
+if ($RemoveDefender -eq 'yes') {
+    Write-Host "Disabling Windows Update (Defender removed, so no updates needed)..."
+    & 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'StopWUPostOOBE1' '/t' 'REG_SZ' '/d' 'net stop wuauserv' '/f'
+    & 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'StopWUPostOOBE2' '/t' 'REG_SZ' '/d' 'sc stop wuauserv' '/f'
+    & 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'StopWUPostOOBE3' '/t' 'REG_SZ' '/d' 'sc config wuauserv start= disabled' '/f'
+    & 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'DisableWUPostOOBE1' '/t' 'REG_SZ' '/d' 'reg add HKLM\SYSTEM\CurrentControlSet\Services\wuauserv /v Start /t REG_DWORD /d 4 /f' '/f'
+    & 'reg' 'add' "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" '/v' 'DisableWUPostOOBE2' '/t' 'REG_SZ' '/d' 'reg add HKLM\SYSTEM\ControlSet001\Services\wuauserv /v Start /t REG_DWORD /d 4 /f' '/f'
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' '/v' 'DoNotConnectToWindowsUpdateInternetLocations' '/t' 'REG_DWORD' '/d' '1' '/f'
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' '/v' 'DisableWindowsUpdateAccess' '/t' 'REG_DWORD' '/d' '1' '/f' 
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' '/v' 'WUServer' '/t' 'REG_SZ' '/d' 'localhost' '/f' 
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' '/v' 'WUStatusServer' '/t' 'REG_SZ' '/d' 'localhost' '/f' 
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' '/v' 'UpdateServiceUrlAlternate' '/t' 'REG_SZ' '/d' 'localhost' '/f' 
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' '/v' 'UseWUServer' '/t' 'REG_DWORD' '/d' '1' '/f' 
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' '/v' 'DisableOnline' '/t' 'REG_DWORD' '/d' '1' '/f' 
+    & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' 
+    & 'reg' 'delete' 'HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC' '/f'
+    & 'reg' 'delete' 'HKLM\zSYSTEM\ControlSet001\Services\UsoSvc' '/f'
+    & 'reg' 'add' 'HKEY_LOCAL_MACHINE\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' '/v' 'NoAutoUpdate' '/t' 'REG_DWORD' '/d' '1' '/f'
+} else {
+    Write-Host "Keeping Windows Update services enabled (Defender needs them for definition updates)..."
+    Write-Host "Disabling automatic OS updates (but allowing Defender updates)..."
+    # Disable automatic OS updates, but keep Windows Update service running for Defender
+    # Do NOT block Windows Update completely - Defender needs it for definition updates
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' '/v' 'NoAutoUpdate' '/t' 'REG_DWORD' '/d' '1' '/f'
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' '/v' 'AUOptions' '/t' 'REG_DWORD' '/d' '1' '/f'  # Notify only
+    # Keep wuauserv service enabled (Start = 2 = Automatic, but updates are manual)
+    & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv' '/v' 'Start' '/t' 'REG_DWORD' '/d' '2' '/f'
+    # Do NOT delete WaaSMedicSVC and UsoSvc - Defender needs them
+    Write-Host "Windows Update service kept enabled for Defender definition updates"
+    Write-Host "Note: OS updates are disabled, but Defender can still update definitions"
+}
+
+# Enable .NET Framework 3.5 AFTER Windows Update services are configured
+# This ensures Windows Update services are available for .NET 3.5 installation in Windows 11 25H2
+Write-Host "Enabling .NET Framework 3.5..."
+# Ensure Windows Update services are enabled for .NET 3.5 installation
+# Temporarily enable wuauserv if it was disabled (we'll disable it later if RemoveDefender=yes)
+$wasWUDisabled = $false
+try {
+    $wuStartValue = (Get-ItemProperty -Path "HKLM:\zSYSTEM\ControlSet001\Services\wuauserv" -Name "Start" -ErrorAction SilentlyContinue).Start
+    if ($wuStartValue -eq 4) {
+        $wasWUDisabled = $true
+        Write-Host "Temporarily enabling Windows Update service for .NET 3.5 installation..."
+        & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv' '/v' 'Start' '/t' 'REG_DWORD' '/d' '2' '/f' | Out-Null
+    }
+} catch {
+    # Service might not exist yet, continue
+}
+
+# Try to enable .NET 3.5 with local source first (from original ISO)
+$sourcePath = "$DriveLetter\sources\sxs"
+if (-not (Test-Path $sourcePath)) {
+    # Fallback to extracted sources
+    $sourcePath = "$mainOSDrive\tiny11\sources\sxs"
+}
+
+Write-Host "Attempting to enable .NET 3.5 using source: $sourcePath"
+try {
+    if (Test-Path $sourcePath) {
+        & 'dism' "/image:$mainOSDrive\scratchdir" '/enable-feature' '/featurename:NetFX3' '/All' "/source:$sourcePath" 2>&1 | Out-Null
+    } else {
+        # If local source not available, try without source (will use Windows Update)
+        Write-Host "Local source not found, attempting to enable .NET 3.5 using Windows Update..."
+        & 'dism' "/image:$mainOSDrive\scratchdir" '/enable-feature' '/featurename:NetFX3' '/All' 2>&1 | Out-Null
+    }
+    
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host ".NET 3.5 has been enabled successfully." -ForegroundColor Green
+    } else {
+        Write-Warning "Failed to enable .NET 3.5 (exit code: $LASTEXITCODE). You may need to install it manually after deployment."
+    }
+} catch {
+    Write-Warning "Error enabling .NET 3.5: $($_.Exception.Message). You may need to install it manually after deployment."
+}
+
+# If Windows Update was temporarily enabled, disable it again if RemoveDefender=yes
+if ($wasWUDisabled -and $RemoveDefender -eq 'yes') {
+    Write-Host "Disabling Windows Update service again (after .NET 3.5 installation)..."
+    & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\wuauserv' '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' | Out-Null
+}
+if ($RemoveDefender -eq 'yes') {
+    Write-Host "Disabling Windows Defender"
+    # Set registry values for Windows Defender services
+    $servicePaths = @(
+        "WinDefend",
+        "WdNisSvc",
+        "WdNisDrv",
+        "WdFilter",
+        "Sense"
+    )
+
+    foreach ($path in $servicePaths) {
+        Set-ItemProperty -Path "HKLM:\zSYSTEM\ControlSet001\Services\$path" -Name "Start" -Value 4
+    }
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' '/v' 'SettingsPageVisibility' '/t' 'REG_SZ' '/d' 'hide:virus;windowsupdate' '/f'
+} else {
+    Write-Host "Keeping Windows Defender enabled (RemoveDefender=no)"
+} 
+Write-Host "Tweaking complete!"
+Dismount-RegistryHives
+Write-Host "Cleaning up image..."
+
+# Inject IRST driver into install.wim if provided or if IRST_Driver folder exists
+if ($IrstDriverPath -or (Test-Path (Join-Path $PSScriptRoot "IRST_Driver"))) {
+    Add-DriverToImage -MountPath "$mainOSDrive\scratchdir" -DriverPath $IrstDriverPath -ImageName "install.wim"
+}
+
+Write-Host "Cleaning up image..."
+& 'dism' '/English' "/image:$mainOSDrive\scratchdir" '/Cleanup-Image' '/StartComponentCleanup' '/ResetBase' >null
+Write-Host "Cleanup complete."
+Write-Host ' '
+Write-Host "Unmounting image..."
+Dismount-WindowsImageWithRetry -Path "$mainOSDrive\scratchdir" -Save
+Write-Host "Exporting image..."
+& 'dism' '/English' '/Export-Image' "/SourceImageFile:$mainOSDrive\tiny11\sources\install.wim" "/SourceIndex:$index" "/DestinationImageFile:$mainOSDrive\tiny11\sources\install2.wim" '/compress:max'
+Remove-Item -Path "$mainOSDrive\tiny11\sources\install.wim" -Force >null
+Rename-Item -Path "$mainOSDrive\tiny11\sources\install2.wim" -NewName "install.wim" >null
+Write-Host "Windows image completed. Continuing with boot.wim."
+if (-not $NonInteractive) {
+    Start-Sleep -Seconds 2
+    try {
+        Clear-Host
+    } catch {
+        # Ignore Clear-Host errors in non-interactive environments
+    }
+}
+Write-Host "Mounting boot image (keeping both WinPE classic menu and Windows Setup)..."
+$wimFilePath = "$($env:SystemDrive)\tiny11\sources\boot.wim" 
+& takeown "/F" $wimFilePath >null
+& icacls $wimFilePath "/grant" "$($adminGroup.Value):(F)"
+try {
+    Set-ItemProperty -Path $wimFilePath -Name IsReadOnly -Value $false -ErrorAction Stop
+} catch {
+    Write-Warning "$wimFilePath IsReadOnly property may not be settable (continuing...)"
+}
+Write-Host "Mounting Windows Setup image (index 2) to modify registry (index 1 - WinPE classic menu will be preserved)..."
+& 'dism' '/English' '/mount-image' "/imagefile:$mainOSDrive\tiny11\sources\boot.wim" '/index:2' "/mountdir:$mainOSDrive\scratchdir"
+Write-Host "Loading registry..."
+reg load HKLM\zCOMPONENTS $mainOSDrive\scratchdir\Windows\System32\config\COMPONENTS
+reg load HKLM\zDEFAULT $mainOSDrive\scratchdir\Windows\System32\config\default
+reg load HKLM\zNTUSER $mainOSDrive\scratchdir\Users\Default\ntuser.dat
+reg load HKLM\zSOFTWARE $mainOSDrive\scratchdir\Windows\System32\config\SOFTWARE
+reg load HKLM\zSYSTEM $mainOSDrive\scratchdir\Windows\System32\config\SYSTEM
+Write-Host "Bypassing system requirements(on the setup image):"
+& 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' >null
+& 'reg' 'add' 'HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' >null
+& 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV1' '/t' 'REG_DWORD' '/d' '0' '/f' >null
+& 'reg' 'add' 'HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache' '/v' 'SV2' '/t' 'REG_DWORD' '/d' '0' '/f' >null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassCPUCheck' '/t' 'REG_DWORD' '/d' '1' '/f' >null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassRAMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' >null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassSecureBootCheck' '/t' 'REG_DWORD' '/d' '1' '/f' >null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassStorageCheck' '/t' 'REG_DWORD' '/d' '1' '/f' >null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassTPMCheck' '/t' 'REG_DWORD' '/d' '1' '/f' >null
+& 'reg' 'add' 'HKLM\zSYSTEM\Setup\MoSetup' '/v' 'AllowUpgradesWithUnsupportedTPMOrCPU' '/t' 'REG_DWORD' '/d' '1' '/f' >null
+# Removed CmdLine registry key to preserve WinPE classic boot menu (index 1)
+# & 'reg' 'add' 'HKEY_LOCAL_MACHINE\zSYSTEM\Setup' '/v' 'CmdLine' '/t' 'REG_SZ' '/d' 'X:\sources\setup.exe' '/f' >null
+Write-Host "Tweaking complete!"
+Dismount-RegistryHives
+
+# Inject IRST driver into boot.wim (Windows Setup) if provided or if IRST_Driver folder exists
+if ($IrstDriverPath -or (Test-Path (Join-Path $PSScriptRoot "IRST_Driver"))) {
+    Add-DriverToImage -MountPath "$mainOSDrive\scratchdir" -DriverPath $IrstDriverPath -ImageName "boot.wim (Windows Setup)"
+}
+
+Write-Host "Unmounting image (keeping both indexes intact)..."
+Dismount-WindowsImageWithRetry -Path "$mainOSDrive\scratchdir" -Save
+if (-not $NonInteractive) {
+    try {
+        Clear-Host
+    } catch {
+        # Ignore Clear-Host errors in non-interactive environments
+    }
+}
+Write-Host "Exporting ESD. This may take a while..."
+& dism /Export-Image /SourceImageFile:"$mainOSDrive\tiny11\sources\install.wim" /SourceIndex:1 /DestinationImageFile:"$mainOSDrive\tiny11\sources\install.esd" /Compress:recovery
+Remove-Item "$mainOSDrive\tiny11\sources\install.wim" > $null 2>&1
+Write-Host "The tiny11 image is now completed. Proceeding with the making of the ISO..."
+Write-Host "Creating ISO image..."
+$hostArchitecture = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+$ADKDepTools = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\$hostArchitecture\Oscdimg"
+$localOSCDIMGPath = "$PSScriptRoot\oscdimg.exe"
+
+if ([System.IO.Directory]::Exists($ADKDepTools)) {
+    Write-Host "Will be using oscdimg.exe from system ADK."
+    $OSCDIMG = "$ADKDepTools\oscdimg.exe"
+} else {
+    Write-Host "ADK folder not found. Will be using bundled oscdimg.exe."
+    
+    
+    $url = "https://msdl.microsoft.com/download/symbols/oscdimg.exe/3D44737265000/oscdimg.exe"
+
+    if (-not (Test-Path -Path $localOSCDIMGPath)) {
+        Write-Host "Downloading oscdimg.exe..."
+        Invoke-WebRequest -Uri $url -OutFile $localOSCDIMGPath
+
+        if (Test-Path $localOSCDIMGPath) {
+            Write-Host "oscdimg.exe downloaded successfully."
+        } else {
+            Write-Error "Failed to download oscdimg.exe."
+            exit 1
+        }
+    } else {
+        Write-Host "oscdimg.exe already exists locally."
+    }
+
+    $OSCDIMG = $localOSCDIMGPath
+}
+
+# Determine ISO filename
+$isoFileName = if ($IsoName -and $IsoName.Trim() -ne '') {
+    # Use custom name if provided, ensure it has .iso extension
+    $name = $IsoName.Trim()
+    if (-not $name.EndsWith('.iso', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $name = "$name.iso"
+    }
+    $name
+} else {
+    # Default name
+    'tiny11-core.iso'
+}
+
+Write-Host "Running oscdimg to create ISO..."
+$isoPath = "$PSScriptRoot\$isoFileName"
+Write-Host "ISO will be saved as: $isoFileName" -ForegroundColor Cyan
+try {
+    $oscdimgOutput = & "$OSCDIMG" '-m' '-o' '-u2' '-udfver102' "-bootdata:2#p0,e,b$mainOSDrive\tiny11\boot\etfsboot.com#pEF,e,b$mainOSDrive\tiny11\efi\microsoft\boot\efisys.bin" "$mainOSDrive\tiny11" $isoPath 2>&1
+    Write-Host ($oscdimgOutput -join "`n") -ForegroundColor Gray
+    
+    # Verify ISO was created
+    Start-Sleep -Seconds 2
+    if (-not (Test-Path $isoPath)) {
+        Write-Error "ISO was not created at expected path: $isoPath"
+        if ($oscdimgOutput) {
+            Write-Error "oscdimg output: $($oscdimgOutput -join "`n")"
+        }
+        exit 1
+    }
+    
+    $isoSize = (Get-Item $isoPath).Length / 1GB
+    Write-Host "✓ ISO created successfully: $isoPath" -ForegroundColor Green
+    Write-Host "  ISO size: $([math]::Round($isoSize, 2)) GB"
+} catch {
+    Write-Error "Failed to create ISO: $($_.Exception.Message)"
+    exit 1
+}
+
+# Finishing up
+Write-Host "Creation completed! Press any key to exit the script..."
+if ($NonInteractive) {
+    Write-Host "Build complete! Cleaning up..."
+} else {
+    Read-Host "Press Enter to continue"
+}
+Write-Host "Performing Cleanup..."
+Remove-Item -Path "$mainOSDrive\tiny11" -Recurse -Force >null
+Remove-Item -Path "$mainOSDrive\scratchdir" -Recurse -Force >null
+
+# Stop the transcript
+Stop-Transcript
+
+exit
+}
+elseif ($input -eq 'n') {
+    Write-Host "You chose not to continue. The script will now exit."
+    exit
+}
+else {
+    Write-Host "Invalid input. Please enter 'y' to continue or 'n' to exit."
+}
+
+# Add Thorium browser (optional)
+if ($AddThorium -eq 'yes') {
+    Write-Host "=== Adding Thorium Browser ===" -ForegroundColor Cyan
+    function Add-ThoriumBrowser {
+        param([string]$MountPath)
+        $tempDir = "$env:TEMP\ThoriumDownload"
+        $thoriumDir = "$MountPath\Program Files\Thorium"
+        try {
+            if (Test-Path $tempDir) { Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+            New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+            Write-Host "Fetching Thorium release info from GitHub..." -ForegroundColor Cyan
+            $asset = $null
+            $apiUrl = "https://api.github.com/repos/Alex313031/Thorium-Win/releases"
+            try {
+                $releases = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'PowerShell' } -ErrorAction Stop
+                foreach ($rel in $releases) {
+                    $match = $rel.assets | Where-Object { 
+                        $_.name -like '*.zip' -and $_.name -notlike '*policy*' -and $_.name -notlike '*debug*'
+                    } | Select-Object -First 1
+                    if ($match) {
+                        $asset = $match
+                        break
+                    }
+                }
+            } catch {
+                Write-Warning "Failed to query Thorium GitHub API: $($_.Exception.Message)"
+            }
+            if (-not $asset) { Write-Warning "No suitable Thorium asset found"; return $false }
+            Write-Host "Downloading $($asset.name)..." -ForegroundColor Cyan
+            $downloadPath = Join-Path $tempDir $asset.name
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $downloadPath -UseBasicParsing
+            if ($asset.name -like '*.zip') {
+                Expand-Archive -Path $downloadPath -DestinationPath $tempDir -Force
+            } elseif ($asset.name -like '*.7z') {
+                $seven = "C:\Program Files\7-Zip\7z.exe"
+                if (-not (Test-Path $seven)) { Write-Warning "7-Zip not found; use .zip"; return $false }
+                & $seven x "$downloadPath" "-o$tempDir" -y | Out-Null
+            }
+            $extracted = (Get-ChildItem -Path $tempDir -Directory | Where-Object { $_.Name -like '*thorium*' -or $_.Name -like '*Thorium*' } | Select-Object -First 1)
+            if (-not $extracted) {
+                $exe = Get-ChildItem -Path $tempDir -Filter 'thorium.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($exe) { $extracted = $exe.Directory }
+            }
+            if (-not $extracted) { Write-Warning "Thorium extraction not found"; return $false }
+            if (Test-Path $thoriumDir) { Remove-Item -Path $thoriumDir -Recurse -Force -ErrorAction SilentlyContinue }
+            New-Item -ItemType Directory -Path $thoriumDir -Force | Out-Null
+            Copy-Item -Path "$($extracted.FullName)\*" -Destination $thoriumDir -Recurse -Force
+            if (-not (Test-Path "$thoriumDir\thorium.exe")) { Write-Warning "thorium.exe missing after copy"; return $false }
+            $startMenuPath = "$MountPath\ProgramData\Microsoft\Windows\Start Menu\Programs"
+            $startMenuPrograms = "$startMenuPath\Thorium"
+            if (-not (Test-Path $startMenuPrograms)) { New-Item -ItemType Directory -Path $startMenuPrograms -Force | Out-Null }
+            $wshShell = New-Object -ComObject WScript.Shell
+            $shortcut = $wshShell.CreateShortcut("$startMenuPrograms\Thorium Browser.lnk")
+            $shortcut.TargetPath = "C:\Program Files\Thorium\thorium.exe"
+            $shortcut.WorkingDirectory = "C:\Program Files\Thorium"
+            $shortcut.Description = "Thorium Browser"
+            $shortcut.Save()
+            return $true
+        } catch {
+            Write-Warning "Thorium install failed: $($_.Exception.Message)"
+            return $false
+        } finally {
+            if (Test-Path $tempDir) { Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    $ok = Add-ThoriumBrowser -MountPath "$mainOSDrive\scratchdir"
+    if ($ok) { Write-Host "✓ Thorium installed" -ForegroundColor Green } else { Write-Host "⚠ Thorium installation failed" -ForegroundColor Yellow }
+}
