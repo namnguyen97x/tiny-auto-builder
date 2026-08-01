@@ -583,6 +583,17 @@ function Set-ModuleRegistryValue {
     }
 }
 
+function Set-RegistryValue {
+    param (
+        [string]$path,
+        [string]$name,
+        [string]$type,
+        [string]$value
+    )
+    Set-ModuleRegistryValue -path $path -name $name -type $type -value $value
+}
+
+
 <#
 .SYNOPSIS
     Apply extended privacy, telemetry and performance registry tweaks
@@ -749,6 +760,7 @@ function New-DynamicAutounattendXml {
 }
 
 # Export các functions
-Export-ModuleMember -Function Remove-DebloatPackages, Apply-DebloatRegistryTweaks, Remove-DebloatFiles, Get-CapabilitiesToRemove, Get-WindowsPackagesToRemove, Apply-ExtendedTelemetryAndPerformanceTweaks, Get-PresetConfig, New-DynamicAutounattendXml
+Export-ModuleMember -Function Remove-DebloatPackages, Apply-DebloatRegistryTweaks, Remove-DebloatFiles, Get-CapabilitiesToRemove, Get-WindowsPackagesToRemove, Apply-ExtendedTelemetryAndPerformanceTweaks, Get-PresetConfig, New-DynamicAutounattendXml, Set-RegistryValue, Set-ModuleRegistryValue
+
 
 
