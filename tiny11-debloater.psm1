@@ -600,11 +600,12 @@ function Set-RegistryValue {
 #>
 function Apply-ExtendedTelemetryAndPerformanceTweaks {
     param(
-        [Parameter(Mandatory=$false)][switch]$DisableThirdPartyTelemetry = $true,
-        [Parameter(Mandatory=$false)][switch]$TuneMouseLatency = $true,
-        [Parameter(Mandatory=$false)][switch]$TuneDefenderCpuLimit = $true,
-        [Parameter(Mandatory=$false)][switch]$EnableUltimatePerformance = $false
+        [Parameter(Mandatory=$false)][bool]$DisableThirdPartyTelemetry = $true,
+        [Parameter(Mandatory=$false)][bool]$TuneMouseLatency = $true,
+        [Parameter(Mandatory=$false)][bool]$TuneDefenderCpuLimit = $true,
+        [Parameter(Mandatory=$false)][bool]$EnableUltimatePerformance = $false
     )
+
     
     Write-Output "Applying extended privacy, telemetry and performance tweaks..."
 

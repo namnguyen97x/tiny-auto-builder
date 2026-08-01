@@ -1095,11 +1095,12 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
 
     if (Get-Command Apply-ExtendedTelemetryAndPerformanceTweaks -ErrorAction SilentlyContinue) {
         Apply-ExtendedTelemetryAndPerformanceTweaks `
-            -DisableThirdPartyTelemetry:($DisableThirdPartyTelemetry -eq 'yes') `
-            -TuneMouseLatency:($TuneMouseLatency -eq 'yes') `
-            -TuneDefenderCpuLimit:($TuneDefenderCpuLimit -eq 'yes') `
-            -EnableUltimatePerformance:($EnableUltimatePerformance -eq 'yes')
+            -DisableThirdPartyTelemetry ($DisableThirdPartyTelemetry -eq 'yes') `
+            -TuneMouseLatency ($TuneMouseLatency -eq 'yes') `
+            -TuneDefenderCpuLimit ($TuneDefenderCpuLimit -eq 'yes') `
+            -EnableUltimatePerformance ($EnableUltimatePerformance -eq 'yes')
     }
+
 }
 
 Write-Host "Enabling Local Accounts on OOBE (Windows 11 25H2+ compatible):"

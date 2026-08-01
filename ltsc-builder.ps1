@@ -558,11 +558,12 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
 
     if (Get-Command Apply-ExtendedTelemetryAndPerformanceTweaks -ErrorAction SilentlyContinue) {
         Apply-ExtendedTelemetryAndPerformanceTweaks `
-            -DisableThirdPartyTelemetry:$true `
-            -TuneMouseLatency:$true `
-            -TuneDefenderCpuLimit:$true `
-            -EnableUltimatePerformance:$false
+            -DisableThirdPartyTelemetry $true `
+            -TuneMouseLatency $true `
+            -TuneDefenderCpuLimit $true `
+            -EnableUltimatePerformance $false
     }
+
 }
 
 
