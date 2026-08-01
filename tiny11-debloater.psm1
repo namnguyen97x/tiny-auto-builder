@@ -566,6 +566,25 @@ function Remove-DebloatFiles {
 
 <#
 .SYNOPSIS
+    Helper function to set registry values in module scope
+#>
+function Set-ModuleRegistryValue {
+    param (
+        [string]$path,
+        [string]$name,
+        [string]$type,
+        [string]$value
+    )
+    try {
+        & 'reg' 'add' $path '/v' $name '/t' $type '/d' $value '/f' 2>&1 | Out-Null
+        Write-Output "Set registry value: $path\$name"
+    } catch {
+        Write-Output "Error setting registry value: $_"
+    }
+}
+
+<#
+.SYNOPSIS
     Apply extended privacy, telemetry and performance registry tweaks
 #>
 function Apply-ExtendedTelemetryAndPerformanceTweaks {
@@ -581,29 +600,30 @@ function Apply-ExtendedTelemetryAndPerformanceTweaks {
     if ($DisableThirdPartyTelemetry) {
         Write-Output "  Disabling 3rd-party app telemetry (Adobe, VSCode, Nvidia)..."
         # VS Code Telemetry
-        Set-RegistryValue -path "HKLM\zSOFTWARE\Policies\Microsoft\VSCode" -name "EnableTelemetry" -type "REG_DWORD" -value "0"
+        Set-ModuleRegistryValue -path "HKLM\zSOFTWARE\Policies\Microsoft\VSCode" -name "EnableTelemetry" -type "REG_DWORD" -value "0"
         # Adobe Telemetry
-        Set-RegistryValue -path "HKLM\zSOFTWARE\Policies\Adobe\CommonFiles" -name "UsageDataCollection" -type "REG_DWORD" -value "0"
+        Set-ModuleRegistryValue -path "HKLM\zSOFTWARE\Policies\Adobe\CommonFiles" -name "UsageDataCollection" -type "REG_DWORD" -value "0"
         # NVIDIA Telemetry
-        Set-RegistryValue -path "HKLM\zSOFTWARE\NVIDIA Corporation\Global\NVTweak" -name "DisplayTelemetry" -type "REG_DWORD" -value "0"
+        Set-ModuleRegistryValue -path "HKLM\zSOFTWARE\NVIDIA Corporation\Global\NVTweak" -name "DisplayTelemetry" -type "REG_DWORD" -value "0"
     }
 
     if ($TuneMouseLatency) {
         Write-Output "  Tuning mouse input queue size for reduced latency..."
-        Set-RegistryValue -path "HKLM\zSYSTEM\ControlSet001\Services\mouclass\Parameters" -name "MouseDataQueueSize" -type "REG_DWORD" -value "100"
-        Set-RegistryValue -path "HKLM\zSYSTEM\ControlSet001\Services\kbdclass\Parameters" -name "KeyboardDataQueueSize" -type "REG_DWORD" -value "100"
+        Set-ModuleRegistryValue -path "HKLM\zSYSTEM\ControlSet001\Services\mouclass\Parameters" -name "MouseDataQueueSize" -type "REG_DWORD" -value "100"
+        Set-ModuleRegistryValue -path "HKLM\zSYSTEM\ControlSet001\Services\kbdclass\Parameters" -name "KeyboardDataQueueSize" -type "REG_DWORD" -value "100"
     }
 
     if ($TuneDefenderCpuLimit) {
         Write-Output "  Limiting Windows Defender scan CPU usage to 25%..."
-        Set-RegistryValue -path "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Scan" -name "AvgCPULoadFactor" -type "REG_DWORD" -value "25"
+        Set-ModuleRegistryValue -path "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Scan" -name "AvgCPULoadFactor" -type "REG_DWORD" -value "25"
     }
 
     if ($EnableUltimatePerformance) {
         Write-Output "  Enabling Ultimate Performance Power Scheme on first boot..."
-        Set-RegistryValue -path "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -name "SetUltimatePowerScheme" -type "REG_SZ" -value "powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61"
+        Set-ModuleRegistryValue -path "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -name "SetUltimatePowerScheme" -type "REG_SZ" -value "powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61"
     }
 }
+
 
 <#
 .SYNOPSIS
