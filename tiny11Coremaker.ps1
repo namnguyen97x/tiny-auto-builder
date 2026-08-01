@@ -98,7 +98,23 @@ if ($Preset -and (Get-Command Get-PresetConfig -ErrorAction SilentlyContinue)) {
 
 
 
+function Set-RegistryValue {
+    param (
+        [string]$path,
+        [string]$name,
+        [string]$type,
+        [string]$value
+    )
+    try {
+        & 'reg' 'add' $path '/v' $name '/t' $type '/d' $value '/f' 2>&1 | Out-Null
+        Write-Output "Set registry value: $path\$name"
+    } catch {
+        Write-Output "Error setting registry value: $_"
+    }
+}
+
 # Check and run the script as admin if required
+
 $adminSID = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
 $adminGroup = $adminSID.Translate([System.Security.Principal.NTAccount])
 $myWindowsID=[System.Security.Principal.WindowsIdentity]::GetCurrent()

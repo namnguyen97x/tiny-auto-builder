@@ -67,7 +67,23 @@ if ($EnableDebloat -eq 'yes') {
     }
 }
 
+function Set-RegistryValue {
+    param (
+        [string]$path,
+        [string]$name,
+        [string]$type,
+        [string]$value
+    )
+    try {
+        & 'reg' 'add' $path '/v' $name '/t' $type '/d' $value '/f' 2>&1 | Out-Null
+        Write-Output "Set registry value: $path\$name"
+    } catch {
+        Write-Output "Error setting registry value: $_"
+    }
+}
+
 Write-Host "=== Windows LTSC ISO Builder with Store ===" -ForegroundColor Cyan
+
 Write-Host "Drive Letter: $DriveLetter"
 Write-Host "Target Edition: $Edition"
 Write-Host "ISO Name: $IsoName"
