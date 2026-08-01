@@ -151,6 +151,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
       
       - name: Setup PowerShell and Environment
         shell: pwsh
