@@ -607,7 +607,9 @@ function Apply-ExtendedTelemetryAndPerformanceTweaks {
         [Parameter(Mandatory=$false)][bool]$BlockFirewallTelemetry = $true,
         [Parameter(Mandatory=$false)][bool]$EnableFastShutdown = $true,
         [Parameter(Mandatory=$false)][bool]$DisableZoneInformation = $true,
-        [Parameter(Mandatory=$false)][bool]$EnableDriverBlocklist = $true
+        [Parameter(Mandatory=$false)][bool]$EnableDriverBlocklist = $true,
+        [Parameter(Mandatory=$false)][bool]$EnableUtcClock = $true,
+        [Parameter(Mandatory=$false)][bool]$DisableMouseAcceleration = $true
     )
 
     Write-Output "Applying extended privacy, telemetry and performance tweaks..."
@@ -626,6 +628,18 @@ function Apply-ExtendedTelemetryAndPerformanceTweaks {
         Write-Output "  Tuning mouse input queue size for reduced latency..."
         Set-ModuleRegistryValue -path "HKLM\zSYSTEM\ControlSet001\Services\mouclass\Parameters" -name "MouseDataQueueSize" -type "REG_DWORD" -value "100"
         Set-ModuleRegistryValue -path "HKLM\zSYSTEM\ControlSet001\Services\kbdclass\Parameters" -name "KeyboardDataQueueSize" -type "REG_DWORD" -value "100"
+    }
+
+    if ($DisableMouseAcceleration) {
+        Write-Output "  Disabling mouse acceleration for 1:1 raw gaming precision..."
+        Set-ModuleRegistryValue -path "HKLM\zNTUSER\Control Panel\Mouse" -name "MouseSpeed" -type "REG_SZ" -value "0"
+        Set-ModuleRegistryValue -path "HKLM\zNTUSER\Control Panel\Mouse" -name "MouseThreshold1" -type "REG_SZ" -value "0"
+        Set-ModuleRegistryValue -path "HKLM\zNTUSER\Control Panel\Mouse" -name "MouseThreshold2" -type "REG_SZ" -value "0"
+    }
+
+    if ($EnableUtcClock) {
+        Write-Output "  Enabling UTC hardware clock (RealTimeIsUniversal=1) for seamless Linux dual-boot..."
+        Set-ModuleRegistryValue -path "HKLM\zSYSTEM\ControlSet001\Control\TimeZoneInformation" -name "RealTimeIsUniversal" -type "REG_DWORD" -value "1"
     }
 
     if ($TuneDefenderCpuLimit) {
@@ -664,6 +678,7 @@ function Apply-ExtendedTelemetryAndPerformanceTweaks {
         Set-ModuleRegistryValue -path "HKLM\zSYSTEM\ControlSet001\Control\CI\Config" -name "VulnerableDriverBlocklistEnable" -type "REG_DWORD" -value "1"
     }
 }
+
 
 
 

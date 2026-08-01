@@ -20,6 +20,9 @@
   "performance": {
     "enableUltimatePerformance": true,
     "tuneMouseLatency": true,
-    "tuneDefenderCpuLimit": true
+    "tuneDefenderCpuLimit": true,
+    "disableMouseAcceleration": true,
+    "enableUtcClock": true
   }
 }
+
