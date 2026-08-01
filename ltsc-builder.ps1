@@ -539,7 +539,16 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
         -DisableGameDVR:$true `
         -TweakOOBE:$true `
         -DisableUselessJunks:$true
+
+    if (Get-Command Apply-ExtendedTelemetryAndPerformanceTweaks -ErrorAction SilentlyContinue) {
+        Apply-ExtendedTelemetryAndPerformanceTweaks `
+            -DisableThirdPartyTelemetry:$true `
+            -TuneMouseLatency:$true `
+            -TuneDefenderCpuLimit:$true `
+            -EnableUltimatePerformance:$false
+    }
 }
+
 
 # Ensure Microsoft Store is allowed and required services are enabled (avoid Store not opening)
 Write-Host "Ensuring Store policies and services are enabled..." -ForegroundColor Cyan

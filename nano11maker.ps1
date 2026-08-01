@@ -30,7 +30,10 @@ param (
     [string]$IrstDriverPath = '',
     
     # Add Thorium browser to the image
-    [ValidateSet('yes','no')][string]$AddThorium = 'no'
+    [ValidateSet('yes','no')][string]$AddThorium = 'no',
+    
+    # Preset configuration profile (name or path, e.g. 'gaming', 'minimal-vm', 'default')
+    [string]$Preset = ''
 )
 
 # Set error handling to continue on non-critical errors
@@ -52,6 +55,52 @@ if ((Get-ExecutionPolicy) -eq 'Restricted') {
         }
     }
 }
+
+# Debloat settings
+$EnableDebloat = 'yes'
+$RemoveOneDrive = 'yes'
+$DisableTelemetry = 'yes'
+$DisableSponsoredApps = 'yes'
+$DisableAds = 'yes'
+$DisableThirdPartyTelemetry = 'yes'
+$TuneMouseLatency = 'yes'
+$TuneDefenderCpuLimit = 'yes'
+$EnableUltimatePerformance = 'no'
+
+# Import debloater module
+if ($EnableDebloat -eq 'yes') {
+    $modulePath = Join-Path $PSScriptRoot "tiny11-debloater.psm1"
+    if (Test-Path $modulePath) {
+        Import-Module $modulePath -Force -ErrorAction SilentlyContinue
+        Write-Output "Debloater module loaded"
+    } else {
+        Write-Warning "Debloater module not found at $modulePath. Debloat features will be disabled."
+        $EnableDebloat = 'no'
+    }
+}
+
+# Load Preset configuration if specified
+if ($Preset -and (Get-Command Get-PresetConfig -ErrorAction SilentlyContinue)) {
+    $presetObj = Get-PresetConfig -PresetNameOrPath $Preset
+    if ($presetObj) {
+        Write-Host "Applying Preset: $($presetObj.name) - $($presetObj.description)" -ForegroundColor Cyan
+        if ($presetObj.debloat) {
+            if ($null -ne $presetObj.debloat.removeDefender) { $RemoveDefender = if ($presetObj.debloat.removeDefender) { 'yes' } else { 'no' } }
+            if ($null -ne $presetObj.debloat.removeAI) { $RemoveAI = if ($presetObj.debloat.removeAI) { 'yes' } else { 'no' } }
+            if ($null -ne $presetObj.debloat.removeEdge) { $RemoveEdge = if ($presetObj.debloat.removeEdge) { 'yes' } else { 'no' } }
+            if ($null -ne $presetObj.debloat.removeStore) { $RemoveStore = if ($presetObj.debloat.removeStore) { 'yes' } else { 'no' } }
+        }
+        if ($presetObj.privacy) {
+            if ($null -ne $presetObj.privacy.disableThirdPartyTelemetry) { $DisableThirdPartyTelemetry = if ($presetObj.privacy.disableThirdPartyTelemetry) { 'yes' } else { 'no' } }
+        }
+        if ($presetObj.performance) {
+            if ($null -ne $presetObj.performance.tuneMouseLatency) { $TuneMouseLatency = if ($presetObj.performance.tuneMouseLatency) { 'yes' } else { 'no' } }
+            if ($null -ne $presetObj.performance.tuneDefenderCpuLimit) { $TuneDefenderCpuLimit = if ($presetObj.performance.tuneDefenderCpuLimit) { 'yes' } else { 'no' } }
+            if ($null -ne $presetObj.performance.enableUltimatePerformance) { $EnableUltimatePerformance = if ($presetObj.performance.enableUltimatePerformance) { 'yes' } else { 'no' } }
+        }
+    }
+}
+
 
 # Check and run the script as admin if required
 $adminSID = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
@@ -997,17 +1046,51 @@ Write-Host "Disabling Windows Spotlight and Lock Screen tips:"
 & 'reg' 'delete' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SuggestedApps' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableConsumerAccountStateContent' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent' '/v' 'DisableCloudOptimizedContent' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+
+# Apply debloater registry tweaks nếu được enable
+if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
+    Write-Host "Applying debloater registry tweaks..."
+    Apply-DebloatRegistryTweaks -RegistryPrefix "HKLM\z" `
+        -DisableTelemetry:($DisableTelemetry -eq 'yes') `
+        -DisableSponsoredApps:($DisableSponsoredApps -eq 'yes') `
+        -DisableAds:($DisableAds -eq 'yes') `
+        -DisableBitlocker:$true `
+        -DisableOneDrive:($RemoveOneDrive -eq 'yes') `
+        -DisableGameDVR:$true `
+        -TweakOOBE:$true `
+        -DisableUselessJunks:$true
+
+    if (Get-Command Apply-ExtendedTelemetryAndPerformanceTweaks -ErrorAction SilentlyContinue) {
+        Apply-ExtendedTelemetryAndPerformanceTweaks `
+            -DisableThirdPartyTelemetry:($DisableThirdPartyTelemetry -eq 'yes') `
+            -TuneMouseLatency:($TuneMouseLatency -eq 'yes') `
+            -TuneDefenderCpuLimit:($TuneDefenderCpuLimit -eq 'yes') `
+            -EnableUltimatePerformance:($EnableUltimatePerformance -eq 'yes')
+    }
+}
+
 Write-Host "Enabling Local Accounts on OOBE (Windows 11 25H2+ compatible):"
 # BypassNRO no longer works from Windows 11 25H2+, use ms-cxh:localonly URI scheme instead
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' '/v' 'OOBELocalAccount' '/t' 'REG_SZ' '/d' 'start ms-cxh:localonly' '/f' | Out-Null
 # Keep BypassNRO for older Windows versions compatibility
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' '/v' 'BypassNRO' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+
+# Generate dynamic autounattend.xml
+if (Get-Command New-DynamicAutounattendXml -ErrorAction SilentlyContinue) {
+    New-DynamicAutounattendXml -OutputPath "$PSScriptRoot\autounattend.xml" `
+        -BypassTPM:$true `
+        -BypassRAM:$true `
+        -BypassStorage:$true `
+        -CompactOS:$true
+}
+
 # Ensure Sysprep directory exists before copying autounattend.xml
 $sysprepDir = "$mainOSDrive\scratchdir\Windows\System32\Sysprep"
 if (-not (Test-Path $sysprepDir)) {
     New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null
 }
 Copy-Item -Path "$PSScriptRoot\autounattend.xml" -Destination "$sysprepDir\autounattend.xml" -Force | Out-Null
+
 Write-Host "Disabling Reserved Storage:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager' '/v' 'ShippedWithReserves' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 Write-Host "Disabling BitLocker Device Encryption"

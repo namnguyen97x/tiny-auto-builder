@@ -1076,6 +1076,14 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
         -DisableGameDVR:$true `
         -TweakOOBE:$true `
         -DisableUselessJunks:$true
+
+    if (Get-Command Apply-ExtendedTelemetryAndPerformanceTweaks -ErrorAction SilentlyContinue) {
+        Apply-ExtendedTelemetryAndPerformanceTweaks `
+            -DisableThirdPartyTelemetry:($DisableThirdPartyTelemetry -eq 'yes') `
+            -TuneMouseLatency:($TuneMouseLatency -eq 'yes') `
+            -TuneDefenderCpuLimit:($TuneDefenderCpuLimit -eq 'yes') `
+            -EnableUltimatePerformance:($EnableUltimatePerformance -eq 'yes')
+    }
 }
 
 Write-Host "Enabling Local Accounts on OOBE (Windows 11 25H2+ compatible):"
@@ -1083,12 +1091,23 @@ Write-Host "Enabling Local Accounts on OOBE (Windows 11 25H2+ compatible):"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' '/v' 'OOBELocalAccount' '/t' 'REG_SZ' '/d' 'start ms-cxh:localonly' '/f' | Out-Null
 # Keep BypassNRO for older Windows versions compatibility
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' '/v' 'BypassNRO' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
+
+# Generate dynamic autounattend.xml
+if (Get-Command New-DynamicAutounattendXml -ErrorAction SilentlyContinue) {
+    New-DynamicAutounattendXml -OutputPath "$PSScriptRoot\autounattend.xml" `
+        -BypassTPM:$true `
+        -BypassRAM:$true `
+        -BypassStorage:$true `
+        -CompactOS:$true
+}
+
 # Ensure Sysprep directory exists before copying autounattend.xml
 $sysprepDir = "$mainOSDrive\scratchdir\Windows\System32\Sysprep"
 if (-not (Test-Path $sysprepDir)) {
     New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null
 }
 Copy-Item -Path "$PSScriptRoot\autounattend.xml" -Destination "$sysprepDir\autounattend.xml" -Force | Out-Null
+
 Write-Host "Disabling Reserved Storage:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager' '/v' 'ShippedWithReserves' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 Write-Host "Disabling BitLocker Device Encryption"
