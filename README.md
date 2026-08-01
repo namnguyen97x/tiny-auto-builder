@@ -12,10 +12,9 @@ The toolkit includes two build modes:
 - Works with any Windows 11 ISO, language, and architecture (x64, arm64)
 - Automated trimming of inbox apps and features
 - Uses DISM recovery compression for smaller ISOs
-- **Preset Profiles**: Easy-to-use JSON presets (`default`, `gaming`, `minimal-vm`)
-- **Dynamic Autounattend Generator**: Custom OOBE bypass, TPM/RAM bypass, and FirstLogon command execution
-- **Winget App Installer Integration**: Automatically install applications (browsers, utilities, dev tools) on first logon
-- **Extended Privacy & Performance Tweaks**: Blocks third-party telemetry (Adobe, VSCode, Nvidia), tunes mouse queue size, and limits Defender CPU load
+- **Optimization Presets**: Easy-to-use JSON presets (`default`, `gaming`, `minimal-vm`)
+- **Dynamic Autounattend Generator**: Custom OOBE bypass and TPM/RAM/Storage/CPU bypasses
+- **Extended Privacy & Performance Tweaks**: Blocks third-party telemetry (Adobe, VSCode, Nvidia), tunes mouse input queue size, and limits Defender CPU load
 - Produces a bootable ISO via `oscdimg.exe`
 
 ### Requirements
@@ -37,8 +36,8 @@ Set-ExecutionPolicy Bypass -Scope Process
 # Basic build
 ./tiny11maker.ps1 -ISO E -SCRATCH D
 
-# Gaming Preset build with extra Winget apps
-./tiny11maker.ps1 -ISO E -SCRATCH D -Preset gaming -InstallApps @("Mozilla.Firefox", "7zip.7zip", "Git.Git")
+# Gaming Preset build
+./tiny11maker.ps1 -ISO E -SCRATCH D -Preset gaming
 ```
 6) Select the mounted ISO drive letter (letter only, no colon).
 7) Choose the Windows edition (SKU) to base your image on.
@@ -49,21 +48,15 @@ Tip: Use `Get-Help .\tiny11maker.ps1 -Detailed` for all available parameters.
 ### Presets & Profiles
 Presets are located in the `presets/` directory and allow effortless configuration:
 - `-Preset default`: Balanced debloat, privacy, and performance for general use.
-- `-Preset gaming`: Optimized for high gaming performance, reduced mouse latency, Ultimate Performance scheme, and installs Steam + Discord.
+- `-Preset gaming`: Optimized for high gaming performance, reduced mouse input latency, and Ultimate Performance power scheme.
 - `-Preset minimal-vm`: Ultra-trimmed build for testing and virtual machine labs.
-
-### Post-Install App Installer (Winget)
-You can specify applications to install automatically on first logon via the `-InstallApps` parameter:
-```powershell
-./tiny11maker.ps1 -ISO E -SCRATCH D -InstallApps @("Mozilla.Firefox", "7zip.7zip", "Valve.Steam")
-```
 
 ### Parameters (common)
 - `-ISO` — Drive letter of the mounted Windows 11 ISO (e.g., `E`)
 - `-SCRATCH` — Working drive letter with sufficient free space
 - `-Preset` — Profile preset name (`default`, `gaming`, `minimal-vm`) or full path to JSON file
-- `-InstallApps` — Array of Winget package IDs to auto-install on first boot
 - Optional flags vary per script; use `Get-Help` to discover advanced options
+
 
 
 ### Build Modes

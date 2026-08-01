@@ -644,7 +644,6 @@ function New-DynamicAutounattendXml {
         [switch]$BypassRAM = $true,
         [switch]$BypassStorage = $true,
         [switch]$CompactOS = $true,
-        [string[]]$InstallApps = @(),
         [string[]]$CustomCommands = @()
     )
 
@@ -653,23 +652,9 @@ function New-DynamicAutounattendXml {
     $firstLogonXml = ""
     $commandIndex = 1
 
-    if ($InstallApps.Count -gt 0 -or $CustomCommands.Count -gt 0) {
+    if ($CustomCommands.Count -gt 0) {
         $firstLogonXml += "            <FirstLogonCommands>`n"
         
-        # Winget install commands
-        if ($InstallApps.Count -gt 0) {
-            foreach ($app in $InstallApps) {
-                if (-not [string]::IsNullOrWhiteSpace($app)) {
-                    $firstLogonXml += "                <SynchronousCommand wcm:action=`"add`">`n"
-                    $firstLogonXml += "                    <Order>$commandIndex</Order>`n"
-                    $firstLogonXml += "                    <CommandLine>powershell -NoProfile -Command `"winget install --id '$app' --accept-source-agreements --accept-package-agreements --silent`"</CommandLine>`n"
-                    $firstLogonXml += "                    <Description>Install $app via Winget</Description>`n"
-                    $firstLogonXml += "                </SynchronousCommand>`n"
-                    $commandIndex++
-                }
-            }
-        }
-
         # Custom commands
         foreach ($cmd in $CustomCommands) {
             if (-not [string]::IsNullOrWhiteSpace($cmd)) {
@@ -686,6 +671,7 @@ function New-DynamicAutounattendXml {
     }
 
     $compactStr = if ($CompactOS) { "true" } else { "false" }
+
 
     $xmlContent = "<?xml version=`"1.0`" encoding=`"utf-8`"?>`n" +
 "<unattend xmlns=`"urn:schemas-microsoft-com:unattend`">`n" +

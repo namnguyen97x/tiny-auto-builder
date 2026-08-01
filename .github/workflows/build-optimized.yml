@@ -54,10 +54,6 @@ on:
         required: false
         default: 'none'
         type: string
-      install_apps:
-        description: 'Comma-separated Winget package IDs to install'
-        required: false
-        type: string
   workflow_dispatch:
     inputs:
       preset:
@@ -70,10 +66,7 @@ on:
           - default
           - gaming
           - minimal-vm
-      install_apps:
-        description: 'Winget Apps (comma-separated, e.g. Mozilla.Firefox, 7zip.7zip)'
-        required: false
-        type: string
+
       build_type:
         description: 'Build type'
         required: false
@@ -423,7 +416,6 @@ jobs:
           ADD_THORIUM: ${{ github.event.inputs.add_thorium || inputs.add_thorium || 'false' }}
           REMOVE_DRIVERS: ${{ github.event.inputs.remove_drivers || inputs.remove_drivers || 'printer,scanner,bluetooth,smartcard,tape,rdp' }}
           PRESET: ${{ github.event.inputs.preset || inputs.preset || 'none' }}
-          INSTALL_APPS: ${{ github.event.inputs.install_apps || inputs.install_apps || '' }}
           ISO_NAME: ${{ github.event.inputs.iso_name || inputs.iso_name || '' }}
         run: |
           $ErrorActionPreference = 'Continue'
@@ -502,16 +494,12 @@ jobs:
           $buildParams['RemoveStore'] = Convert-ToYesNo $env:REMOVE_STORE 'yes'
           $buildParams['AddThorium'] = Convert-ToYesNo $env:ADD_THORIUM 'no'
           
-          # Add Preset & InstallApps if provided
+          # Add Preset if provided
           if ($env:PRESET -and $env:PRESET.Trim() -ne '' -and $env:PRESET.Trim().ToLower() -ne 'none') {
             $buildParams['Preset'] = $env:PRESET.Trim()
             Write-Host "Preset profile selected: $($buildParams['Preset'])" -ForegroundColor Cyan
           }
-          if ($env:INSTALL_APPS -and $env:INSTALL_APPS.Trim() -ne '') {
-            $appsList = $env:INSTALL_APPS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
-            $buildParams['InstallApps'] = $appsList
-            Write-Host "Winget apps to install: $($appsList -join ', ')" -ForegroundColor Cyan
-          }
+
           
           # Add ISO name parameter if provided
           if ($env:ISO_NAME -and $env:ISO_NAME.Trim() -ne '') {

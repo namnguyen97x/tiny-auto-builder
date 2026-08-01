@@ -54,10 +54,7 @@ param (
     [ValidateSet('yes','no')][string]$AddThorium = 'no',
     
     # Preset configuration profile (name or path, e.g. 'gaming', 'minimal-vm', 'default')
-    [string]$Preset = '',
-    
-    # Custom apps to install via Winget on FirstLogon
-    [string[]]$InstallApps = @()
+    [string]$Preset = ''
 )
 
 # Set error handling to continue on non-critical errors
@@ -116,11 +113,9 @@ if ($Preset -and (Get-Command Get-PresetConfig -ErrorAction SilentlyContinue)) {
             if ($null -ne $presetObj.performance.tuneDefenderCpuLimit) { $TuneDefenderCpuLimit = if ($presetObj.performance.tuneDefenderCpuLimit) { 'yes' } else { 'no' } }
             if ($null -ne $presetObj.performance.enableUltimatePerformance) { $EnableUltimatePerformance = if ($presetObj.performance.enableUltimatePerformance) { 'yes' } else { 'no' } }
         }
-        if ($presetObj.installApps -and $InstallApps.Count -eq 0) {
-            $InstallApps = $presetObj.installApps
-        }
     }
 }
+
 
 
 #---------[ Functions ]---------#
@@ -973,12 +968,12 @@ Set-RegistryValue 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' 'Bypass
 # Generate dynamic autounattend.xml
 if (Get-Command New-DynamicAutounattendXml -ErrorAction SilentlyContinue) {
     New-DynamicAutounattendXml -OutputPath "$PSScriptRoot\autounattend.xml" `
-        -InstallApps $InstallApps `
         -BypassTPM:$true `
         -BypassRAM:$true `
         -BypassStorage:$true `
         -CompactOS:$true
 }
+
 
 # Ensure Sysprep directory exists before copying autounattend.xml
 $sysprepDir = "$ScratchDisk\scratchdir\Windows\System32\Sysprep"

@@ -21,6 +21,5 @@
     "enableUltimatePerformance": true,
     "tuneMouseLatency": true,
     "tuneDefenderCpuLimit": true
-  },
-  "installApps": []
+  }
 }
