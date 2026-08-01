@@ -66,6 +66,8 @@ on:
           - default
           - gaming
           - minimal-vm
+          - privacy-plus
+
 
       build_type:
         description: 'Build type'

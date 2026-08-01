@@ -603,10 +603,13 @@ function Apply-ExtendedTelemetryAndPerformanceTweaks {
         [Parameter(Mandatory=$false)][bool]$DisableThirdPartyTelemetry = $true,
         [Parameter(Mandatory=$false)][bool]$TuneMouseLatency = $true,
         [Parameter(Mandatory=$false)][bool]$TuneDefenderCpuLimit = $true,
-        [Parameter(Mandatory=$false)][bool]$EnableUltimatePerformance = $false
+        [Parameter(Mandatory=$false)][bool]$EnableUltimatePerformance = $false,
+        [Parameter(Mandatory=$false)][bool]$BlockFirewallTelemetry = $true,
+        [Parameter(Mandatory=$false)][bool]$EnableFastShutdown = $true,
+        [Parameter(Mandatory=$false)][bool]$DisableZoneInformation = $true,
+        [Parameter(Mandatory=$false)][bool]$EnableDriverBlocklist = $true
     )
 
-    
     Write-Output "Applying extended privacy, telemetry and performance tweaks..."
 
     if ($DisableThirdPartyTelemetry) {
@@ -634,7 +637,34 @@ function Apply-ExtendedTelemetryAndPerformanceTweaks {
         Write-Output "  Enabling Ultimate Performance Power Scheme on first boot..."
         Set-ModuleRegistryValue -path "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -name "SetUltimatePowerScheme" -type "REG_SZ" -value "powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61"
     }
+
+    if ($BlockFirewallTelemetry) {
+        Write-Output "  Adding Windows Firewall rules to block system telemetry outbound connections..."
+        $fwRulePath = "HKLM\zSYSTEM\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules"
+        Set-ModuleRegistryValue -path $fwRulePath -name "Block SearchHost" -type "REG_SZ" -value "v2.32|Action=Block|Active=TRUE|Dir=Out|RA42=IntErnet|RA62=IntErnet|App=%SystemRoot%\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe|Name=Block SearchHost|Desc=Block SearchHost Outbound Traffic|"
+        Set-ModuleRegistryValue -path $fwRulePath -name "Block StartMenuExperienceHost" -type "REG_SZ" -value "v2.32|Action=Block|Active=TRUE|Dir=Out|RA42=IntErnet|RA62=IntErnet|App=%SystemRoot%\SystemApps\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\StartMenuExperienceHost.exe|Name=Block StartMenuExperienceHost|Desc=Block Start Menu Outbound Traffic|"
+        Set-ModuleRegistryValue -path $fwRulePath -name "Block SystemSettings" -type "REG_SZ" -value "v2.32|Action=Block|Active=TRUE|Dir=Out|RA42=IntErnet|RA62=IntErnet|App=%SystemRoot%\ImmersiveControlPanel\SystemSettings.exe|Name=Block SystemSettings|Desc=Block Settings Outbound Telemetry Traffic|"
+        Set-ModuleRegistryValue -path $fwRulePath -name "Block Explorer" -type "REG_SZ" -value "v2.32|Action=Block|Active=TRUE|Dir=Out|RA42=IntErnet|RA62=IntErnet|App=%SystemRoot%\explorer.exe|Name=Block Explorer|Desc=Block Explorer Outbound Home Traffic|"
+    }
+
+    if ($EnableFastShutdown) {
+        Write-Output "  Applying fast shutdown tweaks..."
+        Set-ModuleRegistryValue -path "HKLM\zSYSTEM\ControlSet001\Control" -name "WaitToKillServiceTimeout" -type "REG_SZ" -value "2000"
+        Set-ModuleRegistryValue -path "HKLM\zSYSTEM\ControlSet001\Control" -name "HungAppTimeout" -type "REG_SZ" -value "2000"
+        Set-ModuleRegistryValue -path "HKLM\zSYSTEM\ControlSet001\Control" -name "AutoEndTasks" -type "REG_SZ" -value "1"
+    }
+
+    if ($DisableZoneInformation) {
+        Write-Output "  Bypassing internet download security warning popups (Zone.Identifier)..."
+        Set-ModuleRegistryValue -path "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Attachments" -name "SaveZoneInformation" -type "REG_DWORD" -value "1"
+    }
+
+    if ($EnableDriverBlocklist) {
+        Write-Output "  Enabling vulnerable driver blocklist for enhanced kernel security..."
+        Set-ModuleRegistryValue -path "HKLM\zSYSTEM\ControlSet001\Control\CI\Config" -name "VulnerableDriverBlocklistEnable" -type "REG_DWORD" -value "1"
+    }
 }
+
 
 
 <#
