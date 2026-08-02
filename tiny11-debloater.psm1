@@ -85,7 +85,6 @@ $script:appxPatternsToRemove = @(
     
     # Consumer & Shell Experiences
     "Microsoft.Windows.PeopleExperienceHost*",
-    "Windows.CBSPreview*",
     "Microsoft.WindowsStore*",
     "Microsoft.WindowsCamera*",
     "Microsoft.DesktopAppInstaller*",
@@ -111,7 +110,6 @@ $script:appxPatternsToRemove = @(
     "Microsoft.WindowsTerminal*",
     "Microsoft.WindowsNotepad*",
     "Microsoft.WindowsPaint*",
-    "Microsoft.Windows.CloudExperienceHost*",
     "Microsoft.WindowsTips*",
     "Microsoft.OneDriveSync*",
     "Microsoft.OneDrive*",
@@ -417,9 +415,7 @@ function Apply-DebloatRegistryTweaks {
     # OOBE Tweaks
     if ($TweakOOBE) {
         Write-Output "  Tweaking OOBE..."
-        # BypassNRO no longer works from Windows 11 25H2+, use ms-cxh:localonly URI scheme instead
-        Set-RegValue "SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" "OOBELocalAccount" "REG_SZ" "start ms-cxh:localonly"
-        # Keep BypassNRO for older Windows versions compatibility
+        # BypassNRO for Windows 11 OOBE network bypass compatibility
         Set-RegValue "SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" "BypassNRO" "REG_DWORD" "1"
     }
     
@@ -753,7 +749,7 @@ function New-DynamicAutounattendXml {
     $xmlContent = "<?xml version=`"1.0`" encoding=`"utf-8`"?>`n" +
 "<unattend xmlns=`"urn:schemas-microsoft-com:unattend`">`n" +
 "    <settings pass=`"oobeSystem`">`n" +
-"        <component name=`"Microsoft-Windows-Shell-Setup`" processorArchitecture=`"amd64`" publicKeyToken=`"31bf3856ad364e35`" language=`"neutral`" versionScope=`"nonSxS`" xmlns:wcm=`"http://schemas.microsoft.com/WMIConfig/2002/State`" xmlns:xsi=`"http://www.w3.org/2001/XMLSchema-instance`">`n" +
+"        <component name=`"Microsoft-Windows-Shell-Setup`" processorArchitecture=`"*`" publicKeyToken=`"31bf3856ad364e35`" language=`"neutral`" versionScope=`"nonSxS`" xmlns:wcm=`"http://schemas.microsoft.com/WMIConfig/2002/State`" xmlns:xsi=`"http://www.w3.org/2001/XMLSchema-instance`">`n" +
 "            <OOBE>`n" +
 "                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>`n" +
 "                <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>`n" +
@@ -764,7 +760,7 @@ function New-DynamicAutounattendXml {
 "        </component>`n" +
 "    </settings>`n" +
 "    <settings pass=`"windowsPE`">`n" +
-"        <component name=`"Microsoft-Windows-Setup`" processorArchitecture=`"amd64`" publicKeyToken=`"31bf3856ad364e35`" language=`"neutral`" versionScope=`"nonSxS`" xmlns:wcm=`"http://schemas.microsoft.com/WMIConfig/2002/State`" xmlns:xsi=`"http://www.w3.org/2001/XMLSchema-instance`">`n" +
+"        <component name=`"Microsoft-Windows-Setup`" processorArchitecture=`"*`" publicKeyToken=`"31bf3856ad364e35`" language=`"neutral`" versionScope=`"nonSxS`" xmlns:wcm=`"http://schemas.microsoft.com/WMIConfig/2002/State`" xmlns:xsi=`"http://www.w3.org/2001/XMLSchema-instance`">`n" +
 "            <DynamicUpdate>`n" +
 "                <WillShowUI>OnError</WillShowUI>`n" +
 "            </DynamicUpdate>`n" +

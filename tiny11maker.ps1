@@ -960,10 +960,8 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
 
 }
 
-Write-Output "Enabling Local Accounts on OOBE (Windows 11 25H2+ compatible):"
-# BypassNRO no longer works from Windows 11 25H2+, use ms-cxh:localonly URI scheme instead
-Set-RegistryValue 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' 'OOBELocalAccount' 'REG_SZ' 'start ms-cxh:localonly'
-# Keep BypassNRO for older Windows versions compatibility
+Write-Output "Enabling Local Accounts on OOBE:"
+# Keep BypassNRO for Windows 11 OOBE network bypass
 Set-RegistryValue 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' 'BypassNRO' 'REG_DWORD' '1'
 
 # Generate dynamic autounattend.xml
@@ -1005,8 +1003,8 @@ if ($RemoveDefender -eq 'yes') {
             }
         }
         
-        # Disable Defender services
-        $servicePaths = @("WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense")
+        # Disable Defender services (excluding WdFilter to avoid filesystem filter boot hang)
+        $servicePaths = @("WinDefend", "WdNisSvc", "WdNisDrv", "Sense")
         foreach ($service in $servicePaths) {
             Set-RegistryValue "HKLM\zSYSTEM\ControlSet001\Services\$service" "Start" "REG_DWORD" "4"
         }

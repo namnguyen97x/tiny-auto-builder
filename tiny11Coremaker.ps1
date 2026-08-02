@@ -1103,10 +1103,8 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
 
 }
 
-Write-Host "Enabling Local Accounts on OOBE (Windows 11 25H2+ compatible):"
-# BypassNRO no longer works from Windows 11 25H2+, use ms-cxh:localonly URI scheme instead
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' '/v' 'OOBELocalAccount' '/t' 'REG_SZ' '/d' 'start ms-cxh:localonly' '/f' | Out-Null
-# Keep BypassNRO for older Windows versions compatibility
+Write-Host "Enabling Local Accounts on OOBE:"
+# Keep BypassNRO for Windows 11 OOBE network bypass
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' '/v' 'BypassNRO' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 
 # Generate dynamic autounattend.xml
@@ -1298,7 +1296,6 @@ if ($RemoveDefender -eq 'yes') {
         "WinDefend",
         "WdNisSvc",
         "WdNisDrv",
-        "WdFilter",
         "Sense"
     )
 

@@ -298,15 +298,11 @@ foreach ($line in $wimInfoOutput) {
                 $priority = 1
             }
             # Check for partial match based on edition type
-            elseif ($Edition -eq 'IoT Enterprise LTSC' -and $currentName -like '*IoT Enterprise LTSC*' -and $currentName -notlike '*Subscription*') {
+            elseif ($Edition -like '*IoT Enterprise*' -and $currentName -like '*IoT Enterprise*') {
                 $match = $true
                 $priority = 2
             }
-            elseif ($Edition -eq 'Enterprise LTSC' -and $currentName -like '*Enterprise LTSC*' -and $currentName -notlike '*IoT*') {
-                $match = $true
-                $priority = 2
-            }
-            elseif ($Edition -eq 'IoT Enterprise Subscription LTSC' -and $currentName -like '*IoT Enterprise Subscription LTSC*') {
+            elseif ($Edition -like '*Enterprise*' -and ($currentName -like '*Enterprise LTSC*' -or $currentName -like '*Enterprise LTSB*' -or $currentName -like '*Enterprise*')) {
                 $match = $true
                 $priority = 2
             }
@@ -670,7 +666,6 @@ Write-Host "Bypassing system requirements..." -ForegroundColor Cyan
 & 'reg' 'add' 'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' '/v' 'RotatingLockScreenOverlayEnabled' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 
 # Enable Local Accounts on OOBE
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' '/v' 'OOBELocalAccount' '/t' 'REG_SZ' '/d' 'start ms-cxh:localonly' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' '/v' 'BypassNRO' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 
 # Copy autounattend.xml to Sysprep directory (same as tiny11maker.ps1)
@@ -715,8 +710,8 @@ if ($RemoveDefender -eq 'yes') {
             }
         }
         
-        # Disable Defender services
-        $servicePaths = @("WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense")
+        # Disable Defender services (excluding WdFilter to avoid filesystem filter boot hang)
+        $servicePaths = @("WinDefend", "WdNisSvc", "WdNisDrv", "Sense")
         foreach ($service in $servicePaths) {
             & 'reg' 'add' "HKLM\zSYSTEM\ControlSet001\Services\$service" '/v' 'Start' '/t' 'REG_DWORD' '/d' '4' '/f' | Out-Null
         }
