@@ -279,8 +279,11 @@ jobs:
             return 'no'
           }
 
-          $edition = $env:EDITION
-          $isoName  = if ($env:ISO_NAME) { $env:ISO_NAME } else { 'ltsc.iso' }
+          $edition = if ($env:EDITION -and $env:EDITION.Trim() -ne '') { $env:EDITION.Trim() } else { 'IoT Enterprise LTSC' }
+          $isoName  = if ($env:ISO_NAME -and $env:ISO_NAME.Trim() -ne '') { $env:ISO_NAME.Trim() } else { 'ltsc.iso' }
+          if (-not $isoName.EndsWith('.iso', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $isoName = "$isoName.iso"
+          }
           $removeDefender = Convert-ToYesNo $env:REMOVE_DEFENDER 'no'
           $removeEdge = Convert-ToYesNo $env:REMOVE_EDGE 'yes'
           $removeAI = Convert-ToYesNo $env:REMOVE_AI 'no'
@@ -345,8 +348,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { Write-Warning "Script exited with code $LASTEXITCODE" }
           } catch { Write-Error "Error running script: $_"; exit 1 }
 
-          if (-not $env:ISO_PATH) { $env:ISO_PATH = Join-Path $env:GITHUB_WORKSPACE $isoName }
-          if (-not (Test-Path $env:ISO_PATH)) { Write-Error "ISO was not created at expected path: $env:ISO_PATH"; exit 1 }
+          if (-not $env:ISO_PATH -or -not (Test-Path $env:ISO_PATH)) {
+            $possiblePath = Join-Path $env:GITHUB_WORKSPACE $isoName
+            if (Test-Path $possiblePath) {
+              $env:ISO_PATH = $possiblePath
+            } elseif (Test-Path "$possiblePath.iso") {
+              $env:ISO_PATH = "$possiblePath.iso"
+            }
+          }
+          if (-not $env:ISO_PATH -or -not (Test-Path $env:ISO_PATH)) { Write-Error "ISO was not created at expected path: $env:ISO_PATH (Checked: $isoName)"; exit 1 }
 
           Write-Host "✓ ISO confirmed at: $env:ISO_PATH" -ForegroundColor Green
           echo "ISO_PATH=$env:ISO_PATH" >> $env:GITHUB_ENV

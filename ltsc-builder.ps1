@@ -3,14 +3,11 @@
 # Includes debloat features (similar to tiny11maker) but keeps AI and optionally adds Store
 
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$DriveLetter,
+    [string]$DriveLetter = '',
     
-    [Parameter(Mandatory=$true)]
-    [string]$Edition,
+    [string]$Edition = 'IoT Enterprise LTSC',
     
-    [Parameter(Mandatory=$true)]
-    [string]$IsoName,
+    [string]$IsoName = 'ltsc.iso',
     
     # Debloat options (similar to tiny11maker)
     [ValidateSet('yes','no')]
@@ -267,6 +264,17 @@ if (Test-Path "$mainOSDrive\ltsc\sources\install.esd") {
 Write-Host "Getting image information..."
 $wimInfoOutput = & 'dism' '/English' "/Get-WimInfo" "/wimfile:$mainOSDrive\ltsc\sources\install.wim"
 $wimInfoOutput | Write-Host
+
+# Ensure Edition and IsoName have valid fallback values if empty
+if (-not $Edition -or $Edition.Trim() -eq '') {
+    $Edition = 'IoT Enterprise LTSC'
+}
+if (-not $IsoName -or $IsoName.Trim() -eq '') {
+    $IsoName = 'ltsc.iso'
+}
+if (-not $IsoName.EndsWith('.iso', [System.StringComparison]::OrdinalIgnoreCase)) {
+    $IsoName = "$IsoName.iso"
+}
 
 # Auto-detect edition
 Write-Host "Auto-detecting edition: $Edition" -ForegroundColor Cyan
