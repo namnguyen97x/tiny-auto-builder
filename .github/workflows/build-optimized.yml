@@ -36,9 +36,9 @@ on:
         default: 'true'
         type: string
       remove_store:
-        description: 'Remove Microsoft Store (default: true)'
+        description: 'Remove Microsoft Store (default: false)'
         required: false
-        default: 'true'
+        default: 'false'
         type: string
       iso_name:
         description: 'Custom ISO filename (leave empty to use default: maker.iso, nano11.iso, or tiny11-core.iso)'
@@ -110,7 +110,7 @@ on:
       remove_store:
         description: 'Remove Microsoft Store'
         required: false
-        default: true
+        default: false
         type: boolean
       add_thorium:
         description: 'Add Thorium browser (independent of Edge removal)'
@@ -491,19 +491,36 @@ jobs:
             return 'no'
           }
           
-          # Add debloat parameters
-          Write-Host "Adding debloat parameters..."
-          $buildParams['RemoveDefender'] = Convert-ToYesNo $env:REMOVE_DEFENDER 'no'
-          $buildParams['RemoveAI'] = Convert-ToYesNo $env:REMOVE_AI 'yes'
-          $buildParams['RemoveEdge'] = Convert-ToYesNo $env:REMOVE_EDGE 'yes'
-          $buildParams['RemoveStore'] = Convert-ToYesNo $env:REMOVE_STORE 'yes'
-          $buildParams['AddThorium'] = Convert-ToYesNo $env:ADD_THORIUM 'no'
-          
           # Add Preset if provided
-          if ($env:PRESET -and $env:PRESET.Trim() -ne '' -and $env:PRESET.Trim().ToLower() -ne 'none') {
+          $hasPreset = ($env:PRESET -and $env:PRESET.Trim() -ne '' -and $env:PRESET.Trim().ToLower() -ne 'none')
+          if ($hasPreset) {
             $buildParams['Preset'] = $env:PRESET.Trim()
             Write-Host "Preset profile selected: $($buildParams['Preset'])" -ForegroundColor Cyan
           }
+
+          # Add debloat parameters (only pass explicit 'yes' or pass default if no preset is specified)
+          Write-Host "Adding debloat parameters..."
+          $reqRemoveDefender = Convert-ToYesNo $env:REMOVE_DEFENDER 'no'
+          if ($reqRemoveDefender -eq 'yes' -or -not $hasPreset) {
+            $buildParams['RemoveDefender'] = $reqRemoveDefender
+          }
+
+          $reqRemoveAI = Convert-ToYesNo $env:REMOVE_AI 'yes'
+          if ($reqRemoveAI -eq 'yes' -or -not $hasPreset) {
+            $buildParams['RemoveAI'] = $reqRemoveAI
+          }
+
+          $reqRemoveEdge = Convert-ToYesNo $env:REMOVE_EDGE 'yes'
+          if ($reqRemoveEdge -eq 'yes' -or -not $hasPreset) {
+            $buildParams['RemoveEdge'] = $reqRemoveEdge
+          }
+
+          $reqRemoveStore = Convert-ToYesNo $env:REMOVE_STORE 'no'
+          if ($reqRemoveStore -eq 'yes' -or -not $hasPreset) {
+            $buildParams['RemoveStore'] = $reqRemoveStore
+          }
+
+          $buildParams['AddThorium'] = Convert-ToYesNo $env:ADD_THORIUM 'no'
 
           
           # Add ISO name parameter if provided

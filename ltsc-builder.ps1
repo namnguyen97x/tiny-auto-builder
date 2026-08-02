@@ -29,7 +29,18 @@ param(
     
     # Add Thorium browser to replace Edge (yes = add Thorium if Edge is removed, no = don't add)
     [ValidateSet('yes','no')]
-    [string]$AddThorium = 'yes'
+    [string]$AddThorium = 'yes',
+    
+    # Preset configuration profile (name or path, e.g. 'gaming', 'minimal-vm', 'default')
+    [string]$Preset = '',
+    
+    # Remove Store option (yes = remove Store, no = keep Store) - default no cho LTSC để giữ MS Store
+    [ValidateSet('yes','no')]
+    [string]$RemoveStore = 'no',
+    
+    # Add Store option for LTSC (yes = add/install MS Store on LTSC edition, no = don't add)
+    [ValidateSet('yes','no')]
+    [string]$AddStore = 'yes'
 )
 
 $ErrorActionPreference = 'Continue'
@@ -45,8 +56,12 @@ $DisableTelemetry = 'yes'
 $DisableSponsoredApps = 'yes'
 $DisableAds = 'yes'
 # $RemoveAI được set từ parameter (không hardcode nữa)
-# Store feature removed: always remove Store components
-$RemoveStore = 'yes'
+# $RemoveStore và $AddStore được set từ parameters (default: don't remove Store, add Store for LTSC)
+
+$DisableThirdPartyTelemetry = 'yes'
+$TuneMouseLatency = 'yes'
+$TuneDefenderCpuLimit = 'yes'
+$EnableUltimatePerformance = 'no'
 
 # Determine script root directory (works in both local and GitHub Actions)
 $scriptRoot = $PSScriptRoot
@@ -64,6 +79,28 @@ if ($EnableDebloat -eq 'yes') {
     } else {
         Write-Warning "Debloater module not found at $modulePath. Debloat features will be disabled."
         $EnableDebloat = 'no'
+    }
+}
+
+# Load Preset configuration if specified
+if ($Preset -and (Get-Command Get-PresetConfig -ErrorAction SilentlyContinue)) {
+    $presetObj = Get-PresetConfig -PresetNameOrPath $Preset
+    if ($presetObj) {
+        Write-Host "Applying Preset: $($presetObj.name) - $($presetObj.description)" -ForegroundColor Cyan
+        if ($presetObj.debloat) {
+            if (-not $PSBoundParameters.ContainsKey('RemoveDefender') -and $null -ne $presetObj.debloat.removeDefender) { $RemoveDefender = if ($presetObj.debloat.removeDefender) { 'yes' } else { 'no' } }
+            if (-not $PSBoundParameters.ContainsKey('RemoveAI') -and $null -ne $presetObj.debloat.removeAI) { $RemoveAI = if ($presetObj.debloat.removeAI) { 'yes' } else { 'no' } }
+            if (-not $PSBoundParameters.ContainsKey('RemoveEdge') -and $null -ne $presetObj.debloat.removeEdge) { $RemoveEdge = if ($presetObj.debloat.removeEdge) { 'yes' } else { 'no' } }
+            if (-not $PSBoundParameters.ContainsKey('RemoveStore') -and $null -ne $presetObj.debloat.removeStore) { $RemoveStore = if ($presetObj.debloat.removeStore) { 'yes' } else { 'no' } }
+        }
+        if ($presetObj.privacy) {
+            if (-not $PSBoundParameters.ContainsKey('DisableThirdPartyTelemetry') -and $null -ne $presetObj.privacy.disableThirdPartyTelemetry) { $DisableThirdPartyTelemetry = if ($presetObj.privacy.disableThirdPartyTelemetry) { 'yes' } else { 'no' } }
+        }
+        if ($presetObj.performance) {
+            if (-not $PSBoundParameters.ContainsKey('TuneMouseLatency') -and $null -ne $presetObj.performance.tuneMouseLatency) { $TuneMouseLatency = if ($presetObj.performance.tuneMouseLatency) { 'yes' } else { 'no' } }
+            if (-not $PSBoundParameters.ContainsKey('TuneDefenderCpuLimit') -and $null -ne $presetObj.performance.tuneDefenderCpuLimit) { $TuneDefenderCpuLimit = if ($presetObj.performance.tuneDefenderCpuLimit) { 'yes' } else { 'no' } }
+            if (-not $PSBoundParameters.ContainsKey('EnableUltimatePerformance') -and $null -ne $presetObj.performance.enableUltimatePerformance) { $EnableUltimatePerformance = if ($presetObj.performance.enableUltimatePerformance) { 'yes' } else { 'no' } }
+        }
     }
 }
 
@@ -558,42 +595,47 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
 
     if (Get-Command Apply-ExtendedTelemetryAndPerformanceTweaks -ErrorAction SilentlyContinue) {
         Apply-ExtendedTelemetryAndPerformanceTweaks `
-            -DisableThirdPartyTelemetry $true `
-            -TuneMouseLatency $true `
-            -TuneDefenderCpuLimit $true `
-            -EnableUltimatePerformance $false
+            -DisableThirdPartyTelemetry ($DisableThirdPartyTelemetry -eq 'yes') `
+            -TuneMouseLatency ($TuneMouseLatency -eq 'yes') `
+            -TuneDefenderCpuLimit ($TuneDefenderCpuLimit -eq 'yes') `
+            -EnableUltimatePerformance ($EnableUltimatePerformance -eq 'yes')
     }
-
 }
 
 
 # Ensure Microsoft Store is allowed and required services are enabled (avoid Store not opening)
-Write-Host "Ensuring Store policies and services are enabled..." -ForegroundColor Cyan
-& 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\WindowsStore' '/v' 'RemoveWindowsStore' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\ClipSVC' '/v' 'Start' '/t' 'REG_DWORD' '/d' '3' '/f' | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\AppXSvc' '/v' 'Start' '/t' 'REG_DWORD' '/d' '3' '/f' | Out-Null
-& 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\AppXSvc' '/v' 'DelayedAutoStart' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
-& 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' '/v' 'NoUseStoreOpenWith' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+if ($RemoveStore -eq 'no' -or $AddStore -eq 'yes') {
+    Write-Host "Ensuring Microsoft Store policies and services are enabled..." -ForegroundColor Cyan
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Policies\Microsoft\WindowsStore' '/v' 'RemoveWindowsStore' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+    & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\ClipSVC' '/v' 'Start' '/t' 'REG_DWORD' '/d' '3' '/f' | Out-Null
+    & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\AppXSvc' '/v' 'Start' '/t' 'REG_DWORD' '/d' '3' '/f' | Out-Null
+    & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\AppXSvc' '/v' 'DelayedAutoStart' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
+    & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\InstallService' '/v' 'Start' '/t' 'REG_DWORD' '/d' '3' '/f' | Out-Null
+    & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\LicenseManager' '/v' 'Start' '/t' 'REG_DWORD' '/d' '3' '/f' | Out-Null
+    & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' '/v' 'NoUseStoreOpenWith' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 
-# First-boot fix: re-register Store/App Installer and reset cache
-try {
-    $setupScriptsDir = "$scratchDir\Windows\Setup\Scripts"
-    if (-not (Test-Path $setupScriptsDir)) { New-Item -ItemType Directory -Path $setupScriptsDir -Force | Out-Null }
-    $firstBootCmd = Join-Path $setupScriptsDir 'FirstBoot-StoreFix.cmd'
-    $cmdContent = @"
+    # First-boot fix: install Store on LTSC edition, re-register Store/App Installer and reset cache
+    try {
+        $setupScriptsDir = "$scratchDir\Windows\Setup\Scripts"
+        if (-not (Test-Path $setupScriptsDir)) { New-Item -ItemType Directory -Path $setupScriptsDir -Force | Out-Null }
+        $firstBootCmd = Join-Path $setupScriptsDir 'FirstBoot-StoreFix.cmd'
+        $cmdContent = @"
 @echo off
 REM Ensure services
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Try { Set-Service -Name ClipSVC -StartupType Manual; Start-Service ClipSVC; Set-Service -Name AppXSVC -StartupType Manual; Start-Service AppXSVC } Catch {}"
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Try { Set-Service -Name ClipSVC -StartupType Manual; Start-Service ClipSVC; Set-Service -Name AppXSVC -StartupType Manual; Start-Service AppXSVC; Set-Service -Name InstallService -StartupType Manual; Start-Service InstallService } Catch {}"
+REM Install/Initialize Microsoft Store on LTSC edition
+wsreset.exe -i 2>nul
 REM Re-register Store and App Installer for all users
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$pkgs = 'Microsoft.WindowsStore','Microsoft.DesktopAppInstaller','Microsoft.StorePurchaseApp','Microsoft.XboxIdentityProvider'; foreach($n in $pkgs){ try { $p = Get-AppxPackage -AllUsers $n -ErrorAction SilentlyContinue; if($p -and (Test-Path \"$($p.InstallLocation)\\AppxManifest.xml\")){ Add-AppxPackage -DisableDevelopmentMode -Register \"$($p.InstallLocation)\\AppxManifest.xml\" -ErrorAction SilentlyContinue } } catch {} }"
-REM Reset Store cache (ignore errors on LTSC)
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "`$pkgs = 'Microsoft.WindowsStore','Microsoft.DesktopAppInstaller','Microsoft.StorePurchaseApp','Microsoft.XboxIdentityProvider'; foreach(`$n in `$pkgs){ try { `$p = Get-AppxPackage -AllUsers `$n -ErrorAction SilentlyContinue; if(`$p -and (Test-Path \"`$(`$p.InstallLocation)\\AppxManifest.xml\")){ Add-AppxPackage -DisableDevelopmentMode -Register \"`$(`$p.InstallLocation)\\AppxManifest.xml\" -ErrorAction SilentlyContinue } } catch {} }"
+REM Reset Store cache
 wsreset.exe 2>nul
 exit /b 0
 "@
-    Set-Content -LiteralPath $firstBootCmd -Value $cmdContent -Encoding ASCII -Force
-    & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' '/v' 'FirstBootStoreFix' '/t' 'REG_SZ' '/d' 'C:\\Windows\\Setup\\Scripts\\FirstBoot-StoreFix.cmd' '/f' | Out-Null
-    Write-Host "Scheduled first-boot Store re-registration via RunOnce" -ForegroundColor Green
-} catch { Write-Warning "Failed to stage first-boot Store fix: $_" }
+        Set-Content -LiteralPath $firstBootCmd -Value $cmdContent -Encoding ASCII -Force
+        & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' '/v' 'FirstBootStoreFix' '/t' 'REG_SZ' '/d' 'C:\\Windows\\Setup\\Scripts\\FirstBoot-StoreFix.cmd' '/f' | Out-Null
+        Write-Host "Scheduled first-boot Store installation and re-registration via RunOnce" -ForegroundColor Green
+    } catch { Write-Warning "Failed to stage first-boot Store fix: $_" }
+}
 
 # Bypass system requirements
 Write-Host "Bypassing system requirements..." -ForegroundColor Cyan
@@ -683,10 +725,8 @@ if ($RemoveDefender -eq 'yes') {
 # Unload registry
 Dismount-RegistryHives
 
-# Inject IRST driver into install.wim if provided or if IRST_Driver folder exists
-if ($IrstDriverPath -or (Test-Path (Join-Path $scriptRoot "IRST_Driver"))) {
-    Add-DriverToImage -MountPath $scratchDir -DriverPath $IrstDriverPath -ImageName "install.wim"
-}
+# Inject IRST driver into install.wim (uses IRST_Driver folder or auto-downloads universal VMD drivers)
+Add-DriverToImage -MountPath $scratchDir -DriverPath $IrstDriverPath -ImageName "install.wim"
 
 # Store feature removed: no Store installation logic
 
@@ -858,11 +898,7 @@ if ($AddThorium -eq 'yes') {
             } catch {
                 Write-Warning "Failed to download Thorium from GitHub: $_"
                 return $false
-            }
-        } catch {
-            Write-Warning "Error installing Thorium: $_"
-            return $false
-        } finally {
+            } finally {
             # Cleanup temp directory
             if (Test-Path $tempDir) {
                 Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -930,7 +966,7 @@ if (Test-Path $tempWimFile) {
     $sizeReductionPercent = if ($oldSize -gt 0) { [math]::Round(($sizeReduction / $oldSize) * 100, 2) } else { 0 }
     Write-Host "  Original WIM size: $([math]::Round($oldSize, 2)) GB" -ForegroundColor Gray
     Write-Host "  Compressed WIM size: $([math]::Round($newSize, 2)) GB" -ForegroundColor Green
-    Write-Host "  Size reduction: $([math]::Round($sizeReduction, 2)) GB ($sizeReductionPercent%)" -ForegroundColor $(if ($sizeReduction -gt 0) { "Green" } else { "Yellow" })
+    Write-Host "  Size reduction: $([math]::Round($sizeReduction, 2)) GB (${sizeReductionPercent}%)" -ForegroundColor $(if ($sizeReduction -gt 0) { "Green" } else { "Yellow" })
 } else {
     Write-Warning "Failed to export compressed image, using original WIM file"
 }
@@ -980,10 +1016,8 @@ Write-Host "✓ System requirements bypass applied to Windows Setup" -Foreground
 # Unload registry
 Dismount-RegistryHives
 
-# Inject IRST driver into boot.wim (Windows Setup) if provided
-if ($IrstDriverPath -or (Test-Path (Join-Path $scriptRoot "IRST_Driver"))) {
-    Add-DriverToImage -MountPath $scratchDir -DriverPath $IrstDriverPath -ImageName "boot.wim (Windows Setup)"
-}
+# Inject IRST driver into boot.wim (Windows Setup) (uses IRST_Driver folder or auto-downloads universal VMD drivers)
+Add-DriverToImage -MountPath $scratchDir -DriverPath $IrstDriverPath -ImageName "boot.wim (Windows Setup)"
 
 # Unmount boot.wim (keeping both indexes intact)
 Write-Host "Unmounting boot.wim image..." -ForegroundColor Cyan

@@ -39,6 +39,21 @@ on:
         description: 'Custom ISO filename (leave empty to use default: ltsc.iso)'
         required: false
         type: string
+      preset:
+        description: 'Preset configuration profile (e.g. default, gaming, minimal-vm)'
+        required: false
+        default: 'none'
+        type: string
+      remove_store:
+        description: 'Remove Microsoft Store (default: no)'
+        required: false
+        default: 'no'
+        type: string
+      add_store:
+        description: 'Add Microsoft Store to LTSC (default: yes)'
+        required: false
+        default: 'yes'
+        type: string
   workflow_dispatch:
     inputs:
       iso_url:
@@ -78,6 +93,27 @@ on:
         description: 'Custom ISO filename (leave empty to use default: ltsc.iso)'
         required: false
         type: string
+      preset:
+        description: 'Preset configuration profile'
+        required: false
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - default
+          - gaming
+          - minimal-vm
+          - privacy-plus
+      remove_store:
+        description: 'Remove Microsoft Store'
+        required: false
+        default: false
+        type: boolean
+      add_store:
+        description: 'Add Microsoft Store to LTSC'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -217,6 +253,9 @@ jobs:
           REMOVE_EDGE: ${{ github.event.inputs.remove_edge || inputs.remove_edge || 'yes' }}
           REMOVE_AI: ${{ github.event.inputs.remove_ai || inputs.remove_ai || 'no' }}
           ADD_THORIUM: ${{ github.event.inputs.add_thorium || inputs.add_thorium || 'no' }}
+          PRESET: ${{ github.event.inputs.preset || inputs.preset || 'none' }}
+          REMOVE_STORE: ${{ github.event.inputs.remove_store || inputs.remove_store || 'no' }}
+          ADD_STORE: ${{ github.event.inputs.add_store || inputs.add_store || 'yes' }}
         run: |
           $ErrorActionPreference = 'Continue'
           $buildStartTime = Get-Date
@@ -246,12 +285,36 @@ jobs:
           $removeEdge = Convert-ToYesNo $env:REMOVE_EDGE 'yes'
           $removeAI = Convert-ToYesNo $env:REMOVE_AI 'no'
           $addThorium = Convert-ToYesNo $env:ADD_THORIUM 'no'
+          $removeStore = Convert-ToYesNo $env:REMOVE_STORE 'no'
+          $addStore = Convert-ToYesNo $env:ADD_STORE 'yes'
+          $presetName = if ($env:PRESET -and $env:PRESET.Trim() -ne '' -and $env:PRESET.Trim().ToLower() -ne 'none') { $env:PRESET.Trim() } else { '' }
+
+          $buildParams = @{
+            DriveLetter = $isoDrive
+            Edition = $edition
+            IsoName = $isoName
+            RemoveEdge = $removeEdge
+            RemoveAI = $removeAI
+            AddThorium = $addThorium
+            RemoveStore = $removeStore
+            AddStore = $addStore
+            IrstDriverPath = ''
+          }
+
+          if ($presetName) {
+            $buildParams['Preset'] = $presetName
+          }
+
+          # If user explicitly requested RemoveDefender='yes' OR if no preset is specified, pass RemoveDefender
+          if ($removeDefender -eq 'yes' -or -not $presetName) {
+            $buildParams['RemoveDefender'] = $removeDefender
+          }
 
           Write-Host '=== Build Configuration ===' -ForegroundColor Cyan
           Write-Host "ISO Drive: $isoDrive"
           Write-Host "Target Edition: $edition"
           Write-Host "ISO Name: $isoName"
-          Write-Host "Debloat options: Defender=$removeDefender, AI=$removeAI, Edge=$removeEdge, Thorium=$addThorium" -ForegroundColor Cyan
+          Write-Host "Debloat options: Defender=$removeDefender, AI=$removeAI, Edge=$removeEdge, Thorium=$addThorium, Preset=$presetName" -ForegroundColor Cyan
 
           $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'ltsc-builder.ps1'
           if (-not (Test-Path $scriptPath)) {
@@ -266,7 +329,7 @@ jobs:
           Write-Host "System metrics before build: CPU=$($metricsBefore.CPUPercent)%, Free RAM=$($metricsBefore.FreeMemoryGB) GB"
 
           try {
-          $scriptOutput = & pwsh -File $scriptPath -DriveLetter $isoDrive -Edition $edition -IsoName $isoName -RemoveDefender $removeDefender -RemoveEdge $removeEdge -RemoveAI $removeAI -AddThorium $addThorium -IrstDriverPath '' 2>&1
+          $scriptOutput = & pwsh -File $scriptPath @buildParams 2>&1
             foreach ($line in $scriptOutput) {
               Write-Host $line
               if ($line -match '^ISO_PATH=(.+)$') { $env:ISO_PATH = $Matches[1] }

@@ -12,7 +12,7 @@ param (
     [ValidateSet('yes','no')][string]$RemoveDefender = 'yes',
     [ValidateSet('yes','no')][string]$RemoveAI = 'yes',
     [ValidateSet('yes','no')][string]$RemoveEdge = 'yes',
-    [ValidateSet('yes','no')][string]$RemoveStore = 'yes',
+    [ValidateSet('yes','no')][string]$RemoveStore = 'no',
     
     # Driver removal options (honored from workflow)
     [ValidateSet('yes','no')][string]$RemovePrinterDrivers = 'yes',
@@ -85,18 +85,18 @@ if ($Preset -and (Get-Command Get-PresetConfig -ErrorAction SilentlyContinue)) {
     if ($presetObj) {
         Write-Host "Applying Preset: $($presetObj.name) - $($presetObj.description)" -ForegroundColor Cyan
         if ($presetObj.debloat) {
-            if ($null -ne $presetObj.debloat.removeDefender) { $RemoveDefender = if ($presetObj.debloat.removeDefender) { 'yes' } else { 'no' } }
-            if ($null -ne $presetObj.debloat.removeAI) { $RemoveAI = if ($presetObj.debloat.removeAI) { 'yes' } else { 'no' } }
-            if ($null -ne $presetObj.debloat.removeEdge) { $RemoveEdge = if ($presetObj.debloat.removeEdge) { 'yes' } else { 'no' } }
-            if ($null -ne $presetObj.debloat.removeStore) { $RemoveStore = if ($presetObj.debloat.removeStore) { 'yes' } else { 'no' } }
+            if (-not $PSBoundParameters.ContainsKey('RemoveDefender') -and $null -ne $presetObj.debloat.removeDefender) { $RemoveDefender = if ($presetObj.debloat.removeDefender) { 'yes' } else { 'no' } }
+            if (-not $PSBoundParameters.ContainsKey('RemoveAI') -and $null -ne $presetObj.debloat.removeAI) { $RemoveAI = if ($presetObj.debloat.removeAI) { 'yes' } else { 'no' } }
+            if (-not $PSBoundParameters.ContainsKey('RemoveEdge') -and $null -ne $presetObj.debloat.removeEdge) { $RemoveEdge = if ($presetObj.debloat.removeEdge) { 'yes' } else { 'no' } }
+            if (-not $PSBoundParameters.ContainsKey('RemoveStore') -and $null -ne $presetObj.debloat.removeStore) { $RemoveStore = if ($presetObj.debloat.removeStore) { 'yes' } else { 'no' } }
         }
         if ($presetObj.privacy) {
-            if ($null -ne $presetObj.privacy.disableThirdPartyTelemetry) { $DisableThirdPartyTelemetry = if ($presetObj.privacy.disableThirdPartyTelemetry) { 'yes' } else { 'no' } }
+            if (-not $PSBoundParameters.ContainsKey('DisableThirdPartyTelemetry') -and $null -ne $presetObj.privacy.disableThirdPartyTelemetry) { $DisableThirdPartyTelemetry = if ($presetObj.privacy.disableThirdPartyTelemetry) { 'yes' } else { 'no' } }
         }
         if ($presetObj.performance) {
-            if ($null -ne $presetObj.performance.tuneMouseLatency) { $TuneMouseLatency = if ($presetObj.performance.tuneMouseLatency) { 'yes' } else { 'no' } }
-            if ($null -ne $presetObj.performance.tuneDefenderCpuLimit) { $TuneDefenderCpuLimit = if ($presetObj.performance.tuneDefenderCpuLimit) { 'yes' } else { 'no' } }
-            if ($null -ne $presetObj.performance.enableUltimatePerformance) { $EnableUltimatePerformance = if ($presetObj.performance.enableUltimatePerformance) { 'yes' } else { 'no' } }
+            if (-not $PSBoundParameters.ContainsKey('TuneMouseLatency') -and $null -ne $presetObj.performance.tuneMouseLatency) { $TuneMouseLatency = if ($presetObj.performance.tuneMouseLatency) { 'yes' } else { 'no' } }
+            if (-not $PSBoundParameters.ContainsKey('TuneDefenderCpuLimit') -and $null -ne $presetObj.performance.tuneDefenderCpuLimit) { $TuneDefenderCpuLimit = if ($presetObj.performance.tuneDefenderCpuLimit) { 'yes' } else { 'no' } }
+            if (-not $PSBoundParameters.ContainsKey('EnableUltimatePerformance') -and $null -ne $presetObj.performance.enableUltimatePerformance) { $EnableUltimatePerformance = if ($presetObj.performance.enableUltimatePerformance) { 'yes' } else { 'no' } }
         }
     }
 }
@@ -1205,10 +1205,8 @@ if ($RemoveDefender -eq 'yes') {
 
 Dismount-RegistryHives
 
-# Inject IRST driver into install.wim if provided or if IRST_Driver folder exists
-if ($IrstDriverPath -or (Test-Path (Join-Path $PSScriptRoot "IRST_Driver"))) {
-    Add-DriverToImage -MountPath "$mainOSDrive\scratchdir" -DriverPath $IrstDriverPath -ImageName "install.wim"
-}
+# Inject IRST driver into install.wim (uses IRST_Driver folder or auto-downloads universal VMD drivers)
+Add-DriverToImage -MountPath "$mainOSDrive\scratchdir" -DriverPath $IrstDriverPath -ImageName "install.wim"
 
 # Add Thorium browser (optional)
 if ($AddThorium -eq 'yes') {
@@ -1331,10 +1329,8 @@ Write-Output "Tweaking complete!"
 
 Dismount-RegistryHives
 
-# Inject IRST driver into boot.wim (Windows Setup) if provided or if IRST_Driver folder exists
-if ($IrstDriverPath -or (Test-Path (Join-Path $PSScriptRoot "IRST_Driver"))) {
-    Add-DriverToImage -MountPath "$mainOSDrive\scratchdir" -DriverPath $IrstDriverPath -ImageName "boot.wim (Windows Setup)"
-}
+# Inject IRST driver into boot.wim (Windows Setup) (uses IRST_Driver folder or auto-downloads universal VMD drivers)
+Add-DriverToImage -MountPath "$mainOSDrive\scratchdir" -DriverPath $IrstDriverPath -ImageName "boot.wim (Windows Setup)"
 
 Write-Output "Unmounting image (keeping both indexes intact)..."
 Dismount-WindowsImageWithRetry -Path "$mainOSDrive\scratchdir" -Save

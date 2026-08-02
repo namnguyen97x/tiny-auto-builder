@@ -1,116 +1,173 @@
-## Tiny 11 Auto Builder Tool
-Scripts to build a streamlined, bloat‑reduced Windows 11 image using PowerShell. Works with any official Windows 11 ISO, in any language or architecture.
+# Tiny 11 Auto Builder & LTSC Toolkit
 
-### Overview
-Tiny 11 Auto Builder automates creating a smaller, cleaner Windows 11 ISO. It leverages DISM, recovery compression, and an optional unattended answer file to reduce size, skip the Microsoft Account requirement in OOBE, and deploy with the `/compact` flag. No third‑party binaries are required beyond `oscdimg.exe` from the Windows ADK to generate the bootable ISO.
+[**English**](README.md) | [**Tiếng Việt**](README_VI.md)
 
-The toolkit includes two build modes:
-- `tiny11maker.ps1` — Regular, serviceable Windows 11 (recommended for everyday use)
-- `tiny11coremaker.ps1` — Extra‑minimal, non‑serviceable image (for testing/VMs)
+A powerful, automated PowerShell toolkit designed to build streamlined, bloat-free, and performance-optimized Windows 11 and Windows 11 LTSC ISO images. Works with any official Windows 11 ISO across all languages and system architectures (`x64`, `arm64`).
 
-### Key Features
-- Works with any Windows 11 ISO, language, and architecture (x64, arm64)
-- Automated trimming of inbox apps and features
-- Uses DISM recovery compression for smaller ISOs
-- **Optimization Presets**: Easy-to-use JSON presets (`default`, `gaming`, `minimal-vm`)
-- **Dynamic Autounattend Generator**: Custom OOBE bypass and TPM/RAM/Storage/CPU bypasses
-- **Extended Privacy & Performance Tweaks**: Blocks third-party telemetry (Adobe, VSCode, Nvidia), tunes mouse input queue size, and limits Defender CPU load
-- Produces a bootable ISO via `oscdimg.exe`
+---
 
-### Requirements
-- Windows 11 host with administrative privileges
-- PowerShell 5.1
-- Official Windows 11 ISO (download from Microsoft or via Rufus)
-- Optional: Windows ADK (for `oscdimg.exe`)
+## 🌟 Overview
 
-### Quick Start
-1) Download an official Windows 11 ISO.
-2) Mount the ISO in File Explorer.
-3) Open PowerShell 5.1 as Administrator.
-4) Temporarily allow script execution for this session:
+**Tiny 11 Auto Builder** automates the creation of lightweight Windows 11 images using official Microsoft DISM utilities, recovery compression (`/compact`), and dynamic unattended answer files. No untrusted third-party binaries are used—only `oscdimg.exe` (from the official Microsoft Windows ADK) is utilized for bootable ISO generation.
+
+### Supported Build Modes
+
+| Script | Purpose | Serviceable | Best For |
+| :--- | :--- | :---: | :--- |
+| **`tiny11maker.ps1`** | Streamlined Windows 11 with consumer bloat removed | ✅ Yes | Daily desktop use, gaming, productivity |
+| **`ltsc-builder.ps1`** | Windows 11 Enterprise LTSC / IoT Enterprise LTSC | ✅ Yes | Maximum stability, long-term support, enterprise |
+| **`tiny11Coremaker.ps1`** | Ultra-minimal build with WinSxS component store removed | ❌ No | Lightweight testing labs, throwaway VMs |
+| **`nano11maker.ps1`** | Extra-aggressive footprint reduction with driver removal | ❌ No | Kiosks, low-RAM devices, extreme benchmarking |
+
+---
+
+## ✨ Key Features
+
+- 🎯 **Universal Compatibility**: Works with any Windows 11 or Windows 11 LTSC ISO (21H2 through 25H2+), any language, and architectures (`x64`, `arm64`).
+- ⚡ **Intel RST (VMD) Driver Integration**: Automatically injects Intel Rapid Storage Technology drivers into both **`install.wim`** (Main OS) and **`boot.wim`** (Windows Setup WinPE), resolving "No drives found" NVMe/SSD issues on 11th–14th Gen Intel platforms.
+- 🛒 **Microsoft Store for LTSC**: Preserves MS Store by default and automatically stages Microsoft Store installation (`wsreset.exe -i`) and service activation on LTSC editions.
+- 🎮 **Optimization Presets**: Pre-configured JSON profiles (`gaming`, `minimal-vm`, `privacy-plus`, `default`) for one-click performance tuning.
+- 🔒 **Enhanced Privacy & Latency Tweaks**: Blocks third-party telemetry (Nvidia, VSCode, Adobe), tunes mouse input queue latency, and limits Defender CPU usage.
+- 🚀 **Dynamic OOBE & Hardware Bypass**: Bypasses Microsoft Account requirements on Windows 11 25H2+ (via `ms-cxh:localonly`), TPM 2.0, SecureBoot, RAM, and CPU requirements.
+- 🌐 **Thorium Browser Integration**: Optional one-click injection of the lightweight, AVX2-optimized Thorium browser.
+- ☁️ **GitHub Actions CI/CD**: Cloud-based ISO creation workflows (`build-optimized.yml` and `build-ltsc.yml`).
+
+---
+
+## 🎛️ Optimization Presets
+
+Presets are JSON configuration profiles stored in the `presets/` directory.
+
+| Preset | Description | Highlights |
+| :--- | :--- | :--- |
+| **`default`** | Balanced daily driver profile | Retains Store, removes consumer bloat, applies telemetry tweaks |
+| **`gaming`** | Max performance & low input latency | Tunes mouse queue latency, limits Defender CPU usage, enables Ultimate Performance |
+| **`minimal-vm`** | Ultra-lean footprint for virtual machines | Trims Defender & Store for minimum RAM and disk usage |
+| **`privacy-plus`** | Strict telemetry & privacy hardening | Blocks third-party telemetry, disables ads, sponsored apps & tracking |
+
+> **Parameter Precedence**: Explicit command-line arguments (e.g., `-RemoveDefender yes`) **always take precedence** over preset configuration defaults.
+
+---
+
+## 🛠️ Prerequisites & Requirements
+
+- **Host OS**: Windows 10/11 or Windows Server 2022/2025 (Run as Administrator)
+- **PowerShell**: PowerShell 5.1 or PowerShell 7+
+- **ISO File**: Official Windows 11 or Windows 11 LTSC ISO
+- **Free Disk Space**: At least 15–20 GB of free space on your scratch drive
+
+---
+
+## 🚀 Quick Start (Local PowerShell)
+
+1. Download an official Windows 11 or Windows 11 LTSC ISO.
+2. Double-click the ISO file in Windows File Explorer to mount it (note the drive letter, e.g., `E:`).
+3. Open PowerShell as **Administrator**.
+4. Set execution policy for the current session:
+   ```powershell
+   Set-ExecutionPolicy Bypass -Scope Process
+   ```
+5. Run the desired builder script:
+
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process
+# Standard Tiny11 Build with Gaming Preset
+.\tiny11maker.ps1 -ISO E -SCRATCH D -Preset gaming
+
+# Windows 11 LTSC Build with MS Store & Gaming Preset
+.\ltsc-builder.ps1 -DriveLetter E -Edition "IoT Enterprise LTSC" -IsoName "ltsc-gaming.iso" -Preset gaming
+
+# Custom Debloat (Keep Defender, Remove Edge & AI)
+.\tiny11maker.ps1 -ISO E -SCRATCH D -RemoveDefender no -RemoveEdge yes -RemoveAI yes
 ```
-5) Run a builder script (replace with your paths and drive letters):
-```powershell
-# Basic build
-./tiny11maker.ps1 -ISO E -SCRATCH D
 
-# Gaming Preset build
-./tiny11maker.ps1 -ISO E -SCRATCH D -Preset gaming
-```
-6) Select the mounted ISO drive letter (letter only, no colon).
-7) Choose the Windows edition (SKU) to base your image on.
-8) Wait for completion. The resulting ISO (e.g., `tiny11.iso`) will be created in the script folder.
+---
 
-Tip: Use `Get-Help .\tiny11maker.ps1 -Detailed` for all available parameters.
+## 📋 Parameter Reference
 
-### Presets & Profiles
-Presets are located in the `presets/` directory and allow effortless configuration:
-- `-Preset default`: Balanced debloat, privacy, and performance for general use.
-- `-Preset gaming`: Optimized for high gaming performance, reduced mouse input latency, and Ultimate Performance power scheme.
-- `-Preset minimal-vm`: Ultra-trimmed build for testing and virtual machine labs.
+### `ltsc-builder.ps1`
 
-### Parameters (common)
-- `-ISO` — Drive letter of the mounted Windows 11 ISO (e.g., `E`)
-- `-SCRATCH` — Working drive letter with sufficient free space
-- `-Preset` — Profile preset name (`default`, `gaming`, `minimal-vm`) or full path to JSON file
-- Optional flags vary per script; use `Get-Help` to discover advanced options
+| Parameter | Type | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `-DriveLetter` | `string` | *(Required)* | Drive letter of mounted Windows LTSC ISO (e.g. `E`) |
+| `-Edition` | `string` | *(Required)* | Target edition (`IoT Enterprise LTSC`, `Enterprise LTSC`, `IoT Enterprise Subscription LTSC`) |
+| `-IsoName` | `string` | *(Required)* | Output ISO filename (e.g. `ltsc.iso`) |
+| `-Preset` | `string` | `''` | Preset configuration profile (`gaming`, `minimal-vm`, `privacy-plus`, `default`) |
+| `-RemoveDefender` | `string` | `'no'` | Remove Windows Defender (`yes` / `no`) |
+| `-RemoveEdge` | `string` | `'yes'` | Remove Microsoft Edge browser (`yes` / `no`) |
+| `-RemoveAI` | `string` | `'no'` | Remove AI / Copilot components (`yes` / `no`) |
+| `-RemoveStore` | `string` | `'no'` | Remove Microsoft Store (`yes` / `no`) |
+| `-AddStore` | `string` | `'yes'` | Install & enable MS Store on LTSC edition (`yes` / `no`) |
+| `-AddThorium` | `string` | `'yes'` | Add Thorium browser (`yes` / `no`) |
+| `-IrstDriverPath` | `string` | `''` | Custom path to Intel RST driver `.inf` folder |
 
+### `tiny11maker.ps1`
 
+| Parameter | Type | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `-ISO` | `string` | Prompted | Drive letter of mounted Windows 11 ISO (e.g. `E`) |
+| `-SCRATCH` | `string` | Script Dir | Working drive letter with free disk space (e.g. `D`) |
+| `-Preset` | `string` | `''` | Preset configuration profile (`gaming`, `minimal-vm`, `privacy-plus`, `default`) |
+| `-RemoveDefender` | `string` | `'no'` | Remove Windows Defender (`yes` / `no`) |
+| `-RemoveEdge` | `string` | `'yes'` | Remove Microsoft Edge browser (`yes` / `no`) |
+| `-RemoveAI` | `string` | `'yes'` | Remove AI / Copilot components (`yes` / `no`) |
+| `-RemoveStore` | `string` | `'no'` | Remove Microsoft Store (`yes` / `no`) |
+| `-VersionSelector` | `string` | `'Auto'` | Edition selector (`Auto`, `Pro`, `Home`, `ProWorkstations`) |
+| `-AddThorium` | `string` | `'no'` | Add Thorium browser (`yes` / `no`) |
+| `-IrstDriverPath` | `string` | `''` | Custom path to Intel RST driver `.inf` folder |
+| `-NonInteractive` | `switch` | `$false` | Non-interactive mode for automated scripts / CI |
 
-### Build Modes
-- `tiny11maker.ps1`
-  - Removes consumer bloat while keeping the image serviceable
-  - You can still add languages, updates, and features later
+---
 
-- `tiny11coremaker.ps1`
-  - Removes even more components, including the component store
-  - Not serviceable: you cannot add updates, features, or languages later
-  - Best for fast test/dev environments and lightweight VMs
+## ☁️ GitHub Actions Cloud Building
 
-### Nano 11 (extra‑aggressive build)
-`nano11maker.ps1` targets the smallest possible Windows 11 footprint for highly constrained scenarios (throwaway VMs, labs, kiosks). It removes more apps and components than the regular build and is intended for advanced users who understand the trade‑offs.
+You can generate custom bootable ISOs directly on GitHub runners without installing anything locally.
 
-- Focuses on minimal disk/RAM footprint and reduced background activity
-- Non‑serviceable in practice; expect limited feature/add‑on support
-- Some experiences and system integrations may be absent by design
+1. Fork this repository.
+2. Navigate to the **Actions** tab in your repository.
+3. Select a workflow:
+   - **`Build Tiny11 ISO (Optimized)`** for regular Windows 11 (`maker`, `core`, `nano`).
+   - **`Build LTSC ISO`** for Windows 11 Enterprise LTSC.
+4. Click **Run workflow**, choose your preferred edition, preset, and debloat options.
+5. Once complete, download the generated ISO from the workflow **Artifacts** section.
 
-Quick use (same parameter pattern as other scripts):
-```powershell
-./nano11maker.ps1 -ISO <mount_letter> -SCRATCH <work_letter>
-```
-Use `Get-Help .\nano11maker.ps1 -Detailed` to discover advanced options and up‑to‑date behavior.
+---
 
-### What gets removed
-The exact removal set depends on the mode. In general, the regular build trims common consumer apps; the core build removes everything the regular build does plus additional system components.
+## 🧩 Component Removal Matrix
 
-Regular (`tiny11maker`):
-- Clipchamp, News, Weather, Xbox, GetHelp, GetStarted, Office Hub, Solitaire
-- PeopleApp, PowerAutomate, ToDo, Alarms, Mail and Calendar, Feedback Hub
-- Maps, Sound Recorder, Your Phone, Media Player, Quick Assist
-- Internet Explorer, Tablet PC Math, Edge, OneDrive
+| Component | `tiny11maker` | `ltsc-builder` | `tiny11Coremaker` | `nano11maker` |
+| :--- | :---: | :---: | :---: | :---: |
+| **Consumer Apps** (News, Weather, Solitaire, Xbox) | ❌ Removed | ❌ Removed | ❌ Removed | ❌ Removed |
+| **OneDrive** | ❌ Removed | ❌ Removed | ❌ Removed | ❌ Removed |
+| **Copilot / AI Components** | ❌ Optional | ❌ Retained | ❌ Removed | ❌ Removed |
+| **Microsoft Edge** | ❌ Optional | ❌ Optional | ❌ Optional | ❌ Optional |
+| **Microsoft Store** | ✅ Retained | ✅ Retained & Added | ❌ Optional | ❌ Optional |
+| **Windows Defender** | ✅ Retained | ✅ Retained | ❌ Removed | ❌ Optional |
+| **WinSxS Component Store** | ✅ Retained | ✅ Retained | ❌ Removed | ❌ Removed |
+| **Windows Update** | ✅ Functional | ✅ Functional | ❌ Disabled | ❌ Disabled |
+| **Drivers** (Printer, Bluetooth, Scanner) | ✅ Retained | ✅ Retained | ✅ Retained | ❌ Stripped |
 
-Core (`tiny11coremaker`) additionally targets:
-- Windows Component Store (WinSxS)
-- Windows Defender (disabled; can be re‑enabled, but not recommended)
-- Windows Update (not functional without WinSxS)
-- Windows Recovery Environment (WinRE)
+---
 
-Important: With the core build you cannot add features later. During creation you may be prompted to enable .NET 3.5 support.
+## ❓ Frequently Asked Questions (FAQ)
 
-### Known Issues and Notes
-- Edge stubs may still appear in Settings though the app is removed
-- You may need to update `winget` before installing apps via Microsoft Store
-- Outlook and Dev Home may re‑appear over time; latest scripts minimize this
-- On arm64, a brief script error may appear due to missing `OneDriveSetup.exe`
+<details>
+<summary><b>1. Why does Windows Setup say "No drives found" on my Intel 11th–14th Gen laptop?</b></summary>
+Intel 11th–14th Gen processors use Intel VMD technology. This toolkit automatically injects IRST (Intel Rapid Storage Technology) drivers into both `boot.wim` (WinPE Setup) and `install.wim` (Main OS), ensuring NVMe SSD drives are detected out-of-the-box.
+</details>
 
-### Support and Contributions
-This project is open‑source. PRs and feedback are welcome. Customize the removal list to fit your needs.
+<details>
+<summary><b>2. How is Microsoft Store installed on Windows 11 LTSC?</b></summary>
+Official LTSC ISOs do not include Microsoft Store. When building with `ltsc-builder.ps1`, required Store background services (`ClipSVC`, `AppXSvc`, `InstallService`, `LicenseManager`) are enabled, and `wsreset.exe -i` is automatically staged on first boot to download and initialize Microsoft Store natively.
+</details>
 
-If the tool helps you, consider supporting continued development:
-- Patreon: `http://patreon.com/ntdev`
-- PayPal: `http://paypal.me/ntdev2`
-- Ko‑fi: `http://ko-fi.com/ntdev`
+<details>
+<summary><b>3. Why does Defender remain when I select the Gaming preset?</b></summary>
+The `gaming` preset profile keeps Windows Defender by default while applying CPU scan limits (`25%` CPU cap) and tuning mouse queue latency. If you explicitly specify `-RemoveDefender yes`, your explicit command-line choice will override the preset and remove Defender.
+</details>
 
-Thank you for using Tiny 11 Auto Builder!
+---
+
+## 🤝 Acknowledgments & Credits
+
+- Original Tiny11 concept by **ntdev** (`@ntdevlabs`).
+- Automated builder enhancements, LTSC Store integration, and IRST driver pipeline developed for **Tiny Auto Builder**.
