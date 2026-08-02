@@ -9,7 +9,6 @@
             <OOBE>
                 <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
             </OOBE>
-            <ConfigureChatAutoInstall>false</ConfigureChatAutoInstall>
         </component>
     </settings>
 

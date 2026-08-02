@@ -755,7 +755,6 @@ function New-DynamicAutounattendXml {
 "                <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>`n" +
 "                <ProtectYourPC>3</ProtectYourPC>`n" +
 "            </OOBE>`n" +
-"            <ConfigureChatAutoInstall>false</ConfigureChatAutoInstall>`n" +
 "$firstLogonXml" +
 "        </component>`n" +
 "    </settings>`n" +

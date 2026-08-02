@@ -1099,12 +1099,6 @@ if (Get-Command New-DynamicAutounattendXml -ErrorAction SilentlyContinue) {
         -CompactOS:$true
 }
 
-# Ensure Sysprep directory exists before copying autounattend.xml
-$sysprepDir = "$mainOSDrive\scratchdir\Windows\System32\Sysprep"
-if (-not (Test-Path $sysprepDir)) {
-    New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null
-}
-Copy-Item -Path "$PSScriptRoot\autounattend.xml" -Destination "$sysprepDir\autounattend.xml" -Force | Out-Null
 
 Write-Host "Disabling Reserved Storage:"
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager' '/v' 'ShippedWithReserves' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null

@@ -680,14 +680,6 @@ if (-not (Test-Path $autounattendPath)) {
     }
 }
 
-if (Test-Path $autounattendPath) {
-    $sysprepDir = "$scratchDir\Windows\System32\Sysprep"
-    if (-not (Test-Path $sysprepDir)) {
-        New-Item -ItemType Directory -Path $sysprepDir -Force | Out-Null
-    }
-    Copy-Item -Path $autounattendPath -Destination "$sysprepDir\autounattend.xml" -Force | Out-Null
-    Write-Host "autounattend.xml copied to Sysprep directory" -ForegroundColor Green
-}
 
 # Disable Reserved Storage
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager' '/v' 'ShippedWithReserves' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
@@ -921,9 +913,8 @@ if ($AddThorium -eq 'yes') {
         Write-Host "Configuring Thorium as default browser..." -ForegroundColor Cyan
         try {
             # Set HTTP/HTTPS handlers to Thorium
-            $thoriumPath = "C:\\Program Files\\Thorium\\thorium.exe"
-            & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\http\shell\open\command' '/ve' '/t' 'REG_SZ' "/d`"$thoriumPath`" `"%1`"" '/f' | Out-Null
-            & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\https\shell\open\command' '/ve' '/t' 'REG_SZ' "/d`"$thoriumPath`" `"%1`"" '/f' | Out-Null
+            & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\http\shell\open\command' '/ve' '/t' 'REG_SZ' '/d' '\"C:\Program Files\Thorium\thorium.exe\" \"%1\"' '/f' | Out-Null
+            & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\https\shell\open\command' '/ve' '/t' 'REG_SZ' '/d' '\"C:\Program Files\Thorium\thorium.exe\" \"%1\"' '/f' | Out-Null
             Write-Host "  ✓ Thorium configured as default browser" -ForegroundColor Green
         } catch {
             Write-Warning "  ⚠ Failed to set Thorium as default browser: $_"
