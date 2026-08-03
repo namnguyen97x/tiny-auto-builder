@@ -1113,7 +1113,8 @@ if (Get-Command New-DynamicAutounattendXml -ErrorAction SilentlyContinue) {
         -BypassTPM:$true `
         -BypassRAM:$true `
         -BypassStorage:$true `
-        -CompactOS:$true
+        -BypassCPU:$true `
+        -BypassSecureBoot:$true
 }
 
 

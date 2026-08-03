@@ -713,10 +713,13 @@ function New-DynamicAutounattendXml {
     param(
         [string]$OutputPath = "$PSScriptRoot\autounattend.xml",
         [string]$Username = "",
+        [string]$Architecture = "amd64",
         [switch]$BypassTPM = $true,
         [switch]$BypassRAM = $true,
         [switch]$BypassStorage = $true,
-        [switch]$CompactOS = $true,
+        [switch]$BypassCPU = $true,
+        [switch]$BypassSecureBoot = $true,
+        [switch]$CompactOS = $false,
         [string[]]$CustomCommands = @()
     )
 
@@ -743,13 +746,53 @@ function New-DynamicAutounattendXml {
         $firstLogonXml += "            </FirstLogonCommands>`n"
     }
 
-    $compactStr = if ($CompactOS) { "true" } else { "false" }
+    $runSyncXml = ""
+    $syncIndex = 1
+    if ($BypassTPM) {
+        $runSyncXml += "                <RunSynchronousCommand wcm:action=`"add`">`n" +
+                       "                    <Order>$syncIndex</Order>`n" +
+                       "                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>`n" +
+                       "                </RunSynchronousCommand>`n"
+        $syncIndex++
+    }
+    if ($BypassRAM) {
+        $runSyncXml += "                <RunSynchronousCommand wcm:action=`"add`">`n" +
+                       "                    <Order>$syncIndex</Order>`n" +
+                       "                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>`n" +
+                       "                </RunSynchronousCommand>`n"
+        $syncIndex++
+    }
+    if ($BypassStorage) {
+        $runSyncXml += "                <RunSynchronousCommand wcm:action=`"add`">`n" +
+                       "                    <Order>$syncIndex</Order>`n" +
+                       "                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>`n" +
+                       "                </RunSynchronousCommand>`n"
+        $syncIndex++
+    }
+    if ($BypassCPU) {
+        $runSyncXml += "                <RunSynchronousCommand wcm:action=`"add`">`n" +
+                       "                    <Order>$syncIndex</Order>`n" +
+                       "                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>`n" +
+                       "                </RunSynchronousCommand>`n"
+        $syncIndex++
+    }
+    if ($BypassSecureBoot) {
+        $runSyncXml += "                <RunSynchronousCommand wcm:action=`"add`">`n" +
+                       "                    <Order>$syncIndex</Order>`n" +
+                       "                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>`n" +
+                       "                </RunSynchronousCommand>`n"
+        $syncIndex++
+    }
 
+    $runSyncSection = ""
+    if ($runSyncXml -ne "") {
+        $runSyncSection = "            <RunSynchronous>`n$runSyncXml            </RunSynchronous>`n"
+    }
 
     $xmlContent = "<?xml version=`"1.0`" encoding=`"utf-8`"?>`n" +
 "<unattend xmlns=`"urn:schemas-microsoft-com:unattend`">`n" +
 "    <settings pass=`"oobeSystem`">`n" +
-"        <component name=`"Microsoft-Windows-Shell-Setup`" processorArchitecture=`"*`" publicKeyToken=`"31bf3856ad364e35`" language=`"neutral`" versionScope=`"nonSxS`" xmlns:wcm=`"http://schemas.microsoft.com/WMIConfig/2002/State`" xmlns:xsi=`"http://www.w3.org/2001/XMLSchema-instance`">`n" +
+"        <component name=`"Microsoft-Windows-Shell-Setup`" processorArchitecture=`"$Architecture`" publicKeyToken=`"31bf3856ad364e35`" language=`"neutral`" versionScope=`"nonSxS`" xmlns:wcm=`"http://schemas.microsoft.com/WMIConfig/2002/State`" xmlns:xsi=`"http://www.w3.org/2001/XMLSchema-instance`">`n" +
 "            <OOBE>`n" +
 "                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>`n" +
 "                <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>`n" +
@@ -759,13 +802,12 @@ function New-DynamicAutounattendXml {
 "        </component>`n" +
 "    </settings>`n" +
 "    <settings pass=`"windowsPE`">`n" +
-"        <component name=`"Microsoft-Windows-Setup`" processorArchitecture=`"*`" publicKeyToken=`"31bf3856ad364e35`" language=`"neutral`" versionScope=`"nonSxS`" xmlns:wcm=`"http://schemas.microsoft.com/WMIConfig/2002/State`" xmlns:xsi=`"http://www.w3.org/2001/XMLSchema-instance`">`n" +
+"        <component name=`"Microsoft-Windows-Setup`" processorArchitecture=`"$Architecture`" publicKeyToken=`"31bf3856ad364e35`" language=`"neutral`" versionScope=`"nonSxS`" xmlns:wcm=`"http://schemas.microsoft.com/WMIConfig/2002/State`" xmlns:xsi=`"http://www.w3.org/2001/XMLSchema-instance`">`n" +
 "            <DynamicUpdate>`n" +
 "                <WillShowUI>OnError</WillShowUI>`n" +
 "            </DynamicUpdate>`n" +
 "            <ImageInstall>`n" +
 "                <OSImage>`n" +
-"                    <Compact>$compactStr</Compact>`n" +
 "                    <WillShowUI>Always</WillShowUI>`n" +
 "                </OSImage>`n" +
 "            </ImageInstall>`n" +
@@ -774,24 +816,7 @@ function New-DynamicAutounattendXml {
 "                    <WillShowUI>Always</WillShowUI>`n" +
 "                </ProductKey>`n" +
 "            </UserData>`n" +
-"            <RunSynchronous>`n" +
-"                <RunSynchronousCommand wcm:action=`"add`">`n" +
-"                    <Order>1</Order>`n" +
-"                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>`n" +
-"                </RunSynchronousCommand>`n" +
-"                <RunSynchronousCommand wcm:action=`"add`">`n" +
-"                    <Order>2</Order>`n" +
-"                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>`n" +
-"                </RunSynchronousCommand>`n" +
-"                <RunSynchronousCommand wcm:action=`"add`">`n" +
-"                    <Order>3</Order>`n" +
-"                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>`n" +
-"                </RunSynchronousCommand>`n" +
-"                <RunSynchronousCommand wcm:action=`"add`">`n" +
-"                    <Order>4</Order>`n" +
-"                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>`n" +
-"                </RunSynchronousCommand>`n" +
-"            </RunSynchronous>`n" +
+"$runSyncSection" +
 "        </component>`n" +
 "    </settings>`n" +
 "</unattend>`n"

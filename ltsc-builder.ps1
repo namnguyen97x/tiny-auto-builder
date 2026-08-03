@@ -668,9 +668,16 @@ Write-Host "Bypassing system requirements..." -ForegroundColor Cyan
 # Enable Local Accounts on OOBE
 & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' '/v' 'BypassNRO' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 
-# Copy autounattend.xml to Sysprep directory (same as tiny11maker.ps1)
+# Generate dynamic autounattend.xml (same as tiny11maker.ps1)
 $autounattendPath = Join-Path $scriptRoot "autounattend.xml"
-if (-not (Test-Path $autounattendPath)) {
+if (Get-Command New-DynamicAutounattendXml -ErrorAction SilentlyContinue) {
+    New-DynamicAutounattendXml -OutputPath $autounattendPath `
+        -BypassTPM:$true `
+        -BypassRAM:$true `
+        -BypassStorage:$true `
+        -BypassCPU:$true `
+        -BypassSecureBoot:$true
+} elseif (-not (Test-Path $autounattendPath)) {
     Write-Host "Downloading autounattend.xml..." -ForegroundColor Cyan
     try {
         Invoke-RestMethod "https://raw.githubusercontent.com/ntdevlabs/tiny11builder/refs/heads/main/autounattend.xml" -OutFile $autounattendPath -ErrorAction Stop
