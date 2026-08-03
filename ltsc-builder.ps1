@@ -660,10 +660,15 @@ if ($RemoveStore -eq 'no' -or $AddStore -eq 'yes') {
         if (-not (Test-Path $setupScriptsDir)) { New-Item -ItemType Directory -Path $setupScriptsDir -Force | Out-Null }
         $firstBootPs1 = Join-Path $setupScriptsDir 'FirstBoot-StoreFix.ps1'
         $ps1Lines = @(
-            'Try { Set-Service -Name ClipSVC -StartupType Manual; Start-Service ClipSVC } Catch {}',
-            'Try { Set-Service -Name AppXSVC -StartupType Manual; Start-Service AppXSVC } Catch {}',
-            'Try { Set-Service -Name InstallService -StartupType Manual; Start-Service InstallService } Catch {}',
-            'Try { Set-Service -Name LicenseManager -StartupType Manual; Start-Service LicenseManager } Catch {}',
+            '$ErrorActionPreference = "SilentlyContinue"',
+            'foreach ($s in @("ClipSVC", "AppXSVC", "InstallService", "LicenseManager")) {',
+            '    try {',
+            '        $svc = Get-Service -Name $s -ErrorAction SilentlyContinue',
+            '        if ($svc -and $svc.Status -ne "Running") {',
+            '            Start-Service -Name $s -ErrorAction SilentlyContinue',
+            '        }',
+            '    } catch {}',
+            '}',
             '',
             'Start-Process -FilePath "wsreset.exe" -ArgumentList "-i" -WindowStyle Hidden -ErrorAction SilentlyContinue',
             '',
@@ -707,7 +712,7 @@ if ($RemoveStore -eq 'no' -or $AddStore -eq 'yes') {
         )
         Set-Content -LiteralPath $firstBootPs1 -Value $ps1Lines -Encoding UTF8 -Force
 
-        $runOnceCmd = 'powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Setup\Scripts\FirstBoot-StoreFix.ps1'
+        $runOnceCmd = 'powershell.exe -WindowStyle Hidden -NoLogo -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Setup\Scripts\FirstBoot-StoreFix.ps1'
         & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' '/v' 'FirstBootStoreFix' '/t' 'REG_SZ' '/d' $runOnceCmd '/f' | Out-Null
         Write-Host "Scheduled first-boot Store installation and re-registration via RunOnce" -ForegroundColor Green
     } catch { Write-Warning "Failed to stage first-boot Store fix: $_" }
