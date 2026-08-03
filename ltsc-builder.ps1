@@ -143,7 +143,7 @@ function Dismount-RegistryHives {
             [System.GC]::WaitForPendingFinalizers()
             $res = & reg unload $regPath 2>&1
             if ($LASTEXITCODE -eq 0 -or $res -match "not loaded" -or $res -match "unable to find") {
-                Write-Host "  ✓ Unloaded or not mounted: $regPath" -ForegroundColor Green
+                Write-Host "  [OK] Unloaded or not mounted: $regPath" -ForegroundColor Green
                 $unloaded = $true
                 break
             } else {
@@ -178,7 +178,7 @@ function Dismount-WindowsImageWithRetry {
             } else {
                 Dismount-WindowsImage -Path $Path -Discard -ErrorAction Stop
             }
-            Write-Host "✓ Dismounted Windows Image at $Path successfully" -ForegroundColor Green
+            Write-Host "[OK] Dismounted Windows Image at $Path successfully" -ForegroundColor Green
             $success = $true
             break
         } catch {
@@ -194,7 +194,7 @@ function Dismount-WindowsImageWithRetry {
                 $saveFlag = if ($Save) { '/commit' } else { '/discard' }
                 $dismRes = & dism.exe /English /unmount-image "/mountdir:$Path" $saveFlag 2>&1
                 if ($LASTEXITCODE -eq 0) {
-                    Write-Host "✓ Direct dism.exe unmount succeeded!" -ForegroundColor Green
+                    Write-Host "[OK] Direct dism.exe unmount succeeded!" -ForegroundColor Green
                     $success = $true
                     break
                 } else {
@@ -436,7 +436,7 @@ function Add-DriverToImage {
         $result = & dism /English /image:"$MountPath" /add-driver /driver:"$DriverPath" /recurse 2>&1
         $outputString = $result -join "`n"
         if ($LASTEXITCODE -eq 0 -and -not ($outputString | Select-String -Pattern "Error|Failed|failed" -Quiet)) {
-            Write-Host "✓ IRST drivers injected successfully into $ImageName" -ForegroundColor Green
+            Write-Host "[OK] IRST drivers injected successfully into $ImageName" -ForegroundColor Green
             return
         }
     } catch {
@@ -535,7 +535,7 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
                 Write-Host "  Removing: $($storePkg.PackageName)" -ForegroundColor Gray
                 try {
                     Remove-ProvisionedAppxPackage -Path $scratchDir -PackageName $storePkg.PackageName -ErrorAction Stop | Out-Null
-                    Write-Host "    ✓ Removed successfully" -ForegroundColor Green
+                    Write-Host "    [OK] Removed successfully" -ForegroundColor Green
                 } catch {
                     Write-Host "    ⚠ Warning: Failed to remove $($storePkg.PackageName) - $($_.Exception.Message)" -ForegroundColor Yellow
                 }
@@ -558,7 +558,7 @@ if ($EnableDebloat -eq 'yes' -and (Get-Module -Name tiny11-debloater)) {
                 Write-Host "  Removing: $($aiPkg.PackageName)" -ForegroundColor Gray
                 try {
                     Remove-ProvisionedAppxPackage -Path $scratchDir -PackageName $aiPkg.PackageName -ErrorAction Stop | Out-Null
-                    Write-Host "    ✓ Removed successfully" -ForegroundColor Green
+                    Write-Host "    [OK] Removed successfully" -ForegroundColor Green
                 } catch {
                     Write-Host "    ⚠ Warning: Failed to remove $($aiPkg.PackageName) - $($_.Exception.Message)" -ForegroundColor Yellow
                 }
@@ -618,25 +618,90 @@ if ($RemoveStore -eq 'no' -or $AddStore -eq 'yes') {
     & 'reg' 'add' 'HKLM\zSYSTEM\ControlSet001\Services\LicenseManager' '/v' 'Start' '/t' 'REG_DWORD' '/d' '3' '/f' | Out-Null
     & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' '/v' 'NoUseStoreOpenWith' '/t' 'REG_DWORD' '/d' '0' '/f' | Out-Null
 
+    # Stage LTSC Add-Store offline installer files into WIM (for older LTSC like 2016/2019 without built-in Store)
+    try {
+        $setupScriptsDir = "$scratchDir\Windows\Setup\Scripts"
+        $storeInstallerDir = Join-Path $setupScriptsDir 'StoreInstaller'
+        if (-not (Test-Path $storeInstallerDir)) { New-Item -ItemType Directory -Path $storeInstallerDir -Force | Out-Null }
+
+        Write-Host "Downloading LTSC-Add-MicrosoftStore offline installer for Windows LTSB/LTSC..." -ForegroundColor Cyan
+        $storeZipPath = Join-Path $env:TEMP 'LTSC-Add-MicrosoftStore.zip'
+        $storeZipUrl = 'https://github.com/kkkgo/LTSC-Add-MicrosoftStore/archive/refs/heads/master.zip'
+        
+        Invoke-WebRequest -Uri $storeZipUrl -OutFile $storeZipPath -UseBasicParsing -ErrorAction Stop
+        
+        if (Test-Path $storeZipPath) {
+            $tempExtract = Join-Path $env:TEMP 'LTSC-Add-MicrosoftStore-temp'
+            if (Test-Path $tempExtract) { Remove-Item -Path $tempExtract -Recurse -Force -ErrorAction SilentlyContinue }
+            Expand-Archive -Path $storeZipPath -DestinationPath $tempExtract -Force
+            
+            $masterDir = Get-ChildItem -Path $tempExtract -Directory | Select-Object -First 1
+            if ($masterDir) {
+                Copy-Item -Path "$($masterDir.FullName)\*" -Destination $storeInstallerDir -Recurse -Force
+                Write-Host "[OK] LTSC-Add-MicrosoftStore offline installer staged successfully in WIM" -ForegroundColor Green
+            }
+            Remove-Item -Path $storeZipPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -Path $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Write-Warning "Failed to download LTSC-Add-MicrosoftStore during build: $($_.Exception.Message). FirstBoot script will attempt online installation."
+    }
+
     # First-boot fix: install Store on LTSC edition, re-register Store/App Installer and reset cache
     try {
         $setupScriptsDir = "$scratchDir\Windows\Setup\Scripts"
         if (-not (Test-Path $setupScriptsDir)) { New-Item -ItemType Directory -Path $setupScriptsDir -Force | Out-Null }
-        $firstBootCmd = Join-Path $setupScriptsDir 'FirstBoot-StoreFix.cmd'
-        $cmdContent = @"
-@echo off
-REM Ensure services
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Try { Set-Service -Name ClipSVC -StartupType Manual; Start-Service ClipSVC; Set-Service -Name AppXSVC -StartupType Manual; Start-Service AppXSVC; Set-Service -Name InstallService -StartupType Manual; Start-Service InstallService } Catch {}"
-REM Install/Initialize Microsoft Store on LTSC edition
-wsreset.exe -i 2>nul
-REM Re-register Store and App Installer for all users
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "`$pkgs = 'Microsoft.WindowsStore','Microsoft.DesktopAppInstaller','Microsoft.StorePurchaseApp','Microsoft.XboxIdentityProvider'; foreach(`$n in `$pkgs){ try { `$p = Get-AppxPackage -AllUsers `$n -ErrorAction SilentlyContinue; if(`$p -and (Test-Path \"`$(`$p.InstallLocation)\\AppxManifest.xml\")){ Add-AppxPackage -DisableDevelopmentMode -Register \"`$(`$p.InstallLocation)\\AppxManifest.xml\" -ErrorAction SilentlyContinue } } catch {} }"
-REM Reset Store cache
-wsreset.exe 2>nul
-exit /b 0
-"@
-        Set-Content -LiteralPath $firstBootCmd -Value $cmdContent -Encoding ASCII -Force
-        & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' '/v' 'FirstBootStoreFix' '/t' 'REG_SZ' '/d' 'C:\\Windows\\Setup\\Scripts\\FirstBoot-StoreFix.cmd' '/f' | Out-Null
+        $firstBootPs1 = Join-Path $setupScriptsDir 'FirstBoot-StoreFix.ps1'
+        $ps1Lines = @(
+            'Try { Set-Service -Name ClipSVC -StartupType Manual; Start-Service ClipSVC } Catch {}',
+            'Try { Set-Service -Name AppXSVC -StartupType Manual; Start-Service AppXSVC } Catch {}',
+            'Try { Set-Service -Name InstallService -StartupType Manual; Start-Service InstallService } Catch {}',
+            'Try { Set-Service -Name LicenseManager -StartupType Manual; Start-Service LicenseManager } Catch {}',
+            '',
+            'Start-Process -FilePath "wsreset.exe" -ArgumentList "-i" -WindowStyle Hidden -ErrorAction SilentlyContinue',
+            '',
+            '$stagedCmd = "C:\Windows\Setup\Scripts\StoreInstaller\Add-Store.cmd"',
+            'if (Test-Path $stagedCmd) {',
+            '    Set-Location "C:\Windows\Setup\Scripts\StoreInstaller"',
+            '    Start-Process -FilePath "cmd.exe" -ArgumentList "/c Add-Store.cmd" -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue',
+            '} else {',
+            '    Get-ChildItem -Path "C:\Windows\Setup\Scripts\StoreInstaller" -Include *.appxbundle,*.msixbundle,*.appx,*.msix -Recurse -ErrorAction SilentlyContinue | ForEach-Object {',
+            '        Try { Add-AppxPackage -Path $_.FullName -ErrorAction SilentlyContinue } Catch {}',
+            '    }',
+            '}',
+            '',
+            'if (-not (Get-AppxPackage -AllUsers Microsoft.WindowsStore -ErrorAction SilentlyContinue)) {',
+            '    Try {',
+            '        $zip = Join-Path $env:TEMP "LTSC-Add-MicrosoftStore.zip"',
+            '        $dest = Join-Path $env:TEMP "LTSC-Add-MicrosoftStore"',
+            '        Invoke-WebRequest -Uri "https://github.com/kkkgo/LTSC-Add-MicrosoftStore/archive/refs/heads/master.zip" -OutFile $zip -UseBasicParsing -ErrorAction Stop',
+            '        Expand-Archive -Path $zip -DestinationPath $dest -Force -ErrorAction Stop',
+            '        $cmdFile = Get-ChildItem -Path $dest -Filter "Add-Store.cmd" -Recurse | Select-Object -First 1',
+            '        if ($cmdFile) {',
+            '            Set-Location $cmdFile.DirectoryName',
+            '            $targetPath = $cmdFile.FullName',
+            '            Start-Process -FilePath "cmd.exe" -ArgumentList "/c $targetPath" -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue',
+            '        }',
+            '    } Catch {}',
+            '}',
+            '',
+            '$pkgs = "Microsoft.WindowsStore","Microsoft.DesktopAppInstaller","Microsoft.StorePurchaseApp","Microsoft.XboxIdentityProvider"',
+            'foreach ($n in $pkgs) {',
+            '    try {',
+            '        $p = Get-AppxPackage -AllUsers $n -ErrorAction SilentlyContinue',
+            '        if ($p) {',
+            '            $manifest = Join-Path $p.InstallLocation "AppxManifest.xml"',
+            '            if (Test-Path $manifest) { Add-AppxPackage -DisableDevelopmentMode -Register $manifest -ErrorAction SilentlyContinue }',
+            '        }',
+            '    } catch {}',
+            '}',
+            '',
+            'Start-Process -FilePath "wsreset.exe" -WindowStyle Hidden -ErrorAction SilentlyContinue'
+        )
+        Set-Content -LiteralPath $firstBootPs1 -Value $ps1Lines -Encoding UTF8 -Force
+
+        $runOnceCmd = 'powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Setup\Scripts\FirstBoot-StoreFix.ps1'
+        & 'reg' 'add' 'HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' '/v' 'FirstBootStoreFix' '/t' 'REG_SZ' '/d' $runOnceCmd '/f' | Out-Null
         Write-Host "Scheduled first-boot Store installation and re-registration via RunOnce" -ForegroundColor Green
     } catch { Write-Warning "Failed to stage first-boot Store fix: $_" }
 }
@@ -758,8 +823,7 @@ if ($AddThorium -eq 'yes') {
             
             # Get latest Thorium release from GitHub
             $apiUrl = "https://api.github.com/repos/Alex313031/Thorium-Win/releases"
-            try {
-                $releases = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'PowerShell' } -ErrorAction Stop
+            $releases = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'PowerShell' } -ErrorAction Stop
                 foreach ($rel in $releases) {
                     $match = $rel.assets | Where-Object { 
                         $_.name -like '*.zip' -and $_.name -notlike '*policy*' -and $_.name -notlike '*debug*'
@@ -775,10 +839,6 @@ if ($AddThorium -eq 'yes') {
                     Write-Warning "No suitable Thorium asset found in GitHub releases."
                     return $false
                 }
-            } catch {
-                Write-Warning "Failed to query Thorium GitHub API: $_"
-                return $false
-            }
                 
             if ($asset) {
                 Write-Host "Found release: $($release.tag_name)" -ForegroundColor Green
@@ -890,7 +950,7 @@ if ($AddThorium -eq 'yes') {
                     $shortcut2.Description = "Thorium Browser - Fast Chromium-based browser"
                     $shortcut2.Save()
                     
-                    Write-Host "✓ Thorium browser installed successfully" -ForegroundColor Green
+                    Write-Host "[OK] Thorium browser installed successfully" -ForegroundColor Green
                     Write-Host "  Location: C:\\Program Files\\Thorium" -ForegroundColor Gray
                     return $true
                 } else {
@@ -922,7 +982,7 @@ if ($AddThorium -eq 'yes') {
             # Set HTTP/HTTPS handlers to Thorium
             & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\http\shell\open\command' '/ve' '/t' 'REG_SZ' '/d' '\"C:\Program Files\Thorium\thorium.exe\" \"%1\"' '/f' | Out-Null
             & 'reg' 'add' 'HKLM\zSOFTWARE\Classes\https\shell\open\command' '/ve' '/t' 'REG_SZ' '/d' '\"C:\Program Files\Thorium\thorium.exe\" \"%1\"' '/f' | Out-Null
-            Write-Host "  ✓ Thorium configured as default browser" -ForegroundColor Green
+            Write-Host "  [OK] Thorium configured as default browser" -ForegroundColor Green
         } catch {
             Write-Warning "  ⚠ Failed to set Thorium as default browser: $_"
         }
@@ -959,7 +1019,7 @@ if (Test-Path $tempWimFile) {
     Remove-Item -Path $wimFilePath -Force -ErrorAction SilentlyContinue
     Write-Host "Renaming compressed WIM file..." -ForegroundColor Gray
     Rename-Item -Path $tempWimFile -NewName "install.wim" -Force | Out-Null
-    Write-Host "✓ Image exported and compressed successfully" -ForegroundColor Green
+    Write-Host "[OK] Image exported and compressed successfully" -ForegroundColor Green
     
     # Show size comparison
     $newSize = (Get-Item $wimFilePath).Length / 1GB
@@ -1012,7 +1072,7 @@ Write-Host "Bypassing system requirements on the setup image..." -ForegroundColo
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassSecureBootCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\LabConfig' '/v' 'BypassStorageCheck' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
 & 'reg' 'add' 'HKLM\zSYSTEM\Setup\MoSetup' '/v' 'AllowUpgradesWithUnsupportedTPMOrCPU' '/t' 'REG_DWORD' '/d' '1' '/f' | Out-Null
-Write-Host "✓ System requirements bypass applied to Windows Setup" -ForegroundColor Green
+Write-Host "[OK] System requirements bypass applied to Windows Setup" -ForegroundColor Green
 
 # Unload registry
 Dismount-RegistryHives
@@ -1023,7 +1083,7 @@ Add-DriverToImage -MountPath $scratchDir -DriverPath $IrstDriverPath -ImageName 
 # Unmount boot.wim (keeping both indexes intact)
 Write-Host "Unmounting boot.wim image..." -ForegroundColor Cyan
 Dismount-WindowsImageWithRetry -Path $scratchDir -Save
-Write-Host "✓ boot.wim modifications completed" -ForegroundColor Green
+Write-Host "[OK] boot.wim modifications completed" -ForegroundColor Green
 
 # Create ISO (same as tiny11maker.ps1)
 Write-Host "The LTSC image is now completed. Proceeding with the making of the ISO..." -ForegroundColor Cyan
@@ -1105,7 +1165,7 @@ try {
     }
     
     $isoSize = (Get-Item $isoPath).Length / 1GB
-    Write-Host "✓ ISO created successfully: $isoPath" -ForegroundColor Green
+    Write-Host "[OK] ISO created successfully: $isoPath" -ForegroundColor Green
     Write-Host "  ISO size: $([math]::Round($isoSize, 2)) GB" -ForegroundColor Green
     
     # Output ISO path for workflow (use Write-Output for parsing)
