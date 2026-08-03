@@ -212,6 +212,13 @@ function Dismount-WindowsImageWithRetry {
 }
 
 # Validate inputs
+if (-not $DriveLetter -or $DriveLetter.Trim() -eq '') {
+    Write-Error "DriveLetter parameter is required but was not provided."
+    exit 1
+}
+
+$DriveLetter = $DriveLetter.TrimEnd('\').TrimEnd(':') + ':'
+
 if (-not (Test-Path "$DriveLetter\sources\install.wim") -and -not (Test-Path "$DriveLetter\sources\install.esd")) {
     Write-Error "Windows installation files not found in $DriveLetter"
     exit 1

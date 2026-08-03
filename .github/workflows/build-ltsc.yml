@@ -320,7 +320,7 @@ jobs:
           Write-Host "System metrics before build: CPU=$($metricsBefore.CPUPercent)%, Free RAM=$($metricsBefore.FreeMemoryGB) GB"
 
           try {
-            & pwsh -File $scriptPath @buildParams 2>&1 | ForEach-Object {
+            & $scriptPath @buildParams 2>&1 | ForEach-Object {
               $line = $_
               Write-Host $line
               if ($line -match '^ISO_PATH=(.+)$') { $env:ISO_PATH = $Matches[1] }
