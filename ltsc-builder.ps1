@@ -646,6 +646,14 @@ if ($RemoveStore -eq 'no' -or $AddStore -eq 'yes') {
             if ($masterDir) {
                 Copy-Item -Path "$($masterDir.FullName)\*" -Destination $storeInstallerDir -Recurse -Force
                 Write-Host "[OK] LTSC-Add-MicrosoftStore offline installer staged successfully in WIM" -ForegroundColor Green
+
+                # DISM offline provision Store packages directly into mounted WIM image
+                Write-Host "Provisioning Store AppX packages into offline WIM image..." -ForegroundColor Cyan
+                Get-ChildItem -Path $storeInstallerDir -Include *.appxbundle,*.msixbundle,*.appx,*.msix -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+                    Try {
+                        & 'dism.exe' "/Image:$scratchDir" '/Add-ProvisionedPackage' "/PackagePath:$($_.FullName)" '/SkipLicense' | Out-Null
+                    } Catch {}
+                }
             }
             Remove-Item -Path $storeZipPath -Force -ErrorAction SilentlyContinue
             Remove-Item -Path $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
@@ -653,6 +661,36 @@ if ($RemoveStore -eq 'no' -or $AddStore -eq 'yes') {
     } catch {
         Write-Warning "Failed to download LTSC-Add-MicrosoftStore during build: $($_.Exception.Message). FirstBoot script will attempt online installation."
     }
+
+    # Create SetupComplete.cmd to execute Store installation under SYSTEM context at end of Windows Setup
+    try {
+        $setupScriptsDir = "$scratchDir\Windows\Setup\Scripts"
+        if (-not (Test-Path $setupScriptsDir)) { New-Item -ItemType Directory -Path $setupScriptsDir -Force | Out-Null }
+
+        $setupCompleteCmd = Join-Path $setupScriptsDir 'SetupComplete.cmd'
+        $setupCompleteLines = @(
+            '@echo off',
+            'sc config ClipSVC start= demand',
+            'sc start ClipSVC',
+            'sc config AppXSvc start= demand',
+            'sc start AppXSvc',
+            'sc config InstallService start= demand',
+            'sc start InstallService',
+            'sc config LicenseManager start= demand',
+            'sc start LicenseManager',
+            '',
+            'if exist "%SystemRoot%\Setup\Scripts\StoreInstaller\Add-Store.cmd" (',
+            '    cd /d "%SystemRoot%\Setup\Scripts\StoreInstaller"',
+            '    call Add-Store.cmd',
+            ')',
+            '',
+            'powershell.exe -ExecutionPolicy Bypass -Command "Get-ChildItem -Path ''%SystemRoot%\Setup\Scripts\StoreInstaller'' -Include *.appxbundle,*.msixbundle,*.appx,*.msix -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Try { Add-AppxPackage -Path $_.FullName -ErrorAction SilentlyContinue } Catch {} }"',
+            '',
+            'wsreset.exe -i'
+        )
+        Set-Content -LiteralPath $setupCompleteCmd -Value $setupCompleteLines -Encoding ASCII -Force
+        Write-Host "[OK] SetupComplete.cmd created to run Store installer as SYSTEM before user logon" -ForegroundColor Green
+    } catch { Write-Warning "Failed to create SetupComplete.cmd: $_" }
 
     # First-boot fix: install Store on LTSC edition, re-register Store/App Installer and reset cache
     try {
@@ -670,15 +708,10 @@ if ($RemoveStore -eq 'no' -or $AddStore -eq 'yes') {
             '    } catch {}',
             '}',
             '',
-            'Start-Process -FilePath "wsreset.exe" -ArgumentList "-i" -WindowStyle Hidden -ErrorAction SilentlyContinue',
-            '',
-            '$stagedCmd = "C:\Windows\Setup\Scripts\StoreInstaller\Add-Store.cmd"',
-            'if (Test-Path $stagedCmd) {',
-            '    Set-Location "C:\Windows\Setup\Scripts\StoreInstaller"',
-            '    Start-Process -FilePath "cmd.exe" -ArgumentList "/c Add-Store.cmd" -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue',
-            '} else {',
-            '    Get-ChildItem -Path "C:\Windows\Setup\Scripts\StoreInstaller" -Include *.appxbundle,*.msixbundle,*.appx,*.msix -Recurse -ErrorAction SilentlyContinue | ForEach-Object {',
-            '        Try { Add-AppxPackage -Path $_.FullName -ErrorAction SilentlyContinue } Catch {}',
+            'if (-not (Get-AppxPackage -AllUsers Microsoft.WindowsStore -ErrorAction SilentlyContinue)) {',
+            '    if (Test-Path "C:\Windows\Setup\Scripts\StoreInstaller\Add-Store.cmd") {',
+            '        Set-Location "C:\Windows\Setup\Scripts\StoreInstaller"',
+            '        Start-Process -FilePath "cmd.exe" -ArgumentList "/c Add-Store.cmd" -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue',
             '    }',
             '}',
             '',
@@ -697,7 +730,7 @@ if ($RemoveStore -eq 'no' -or $AddStore -eq 'yes') {
             '    } Catch {}',
             '}',
             '',
-            '$pkgs = "Microsoft.WindowsStore","Microsoft.DesktopAppInstaller","Microsoft.StorePurchaseApp","Microsoft.XboxIdentityProvider"',
+            '$pkgs = @("Microsoft.WindowsStore","Microsoft.DesktopAppInstaller","Microsoft.StorePurchaseApp","Microsoft.XboxIdentityProvider")',
             'foreach ($n in $pkgs) {',
             '    try {',
             '        $p = Get-AppxPackage -AllUsers $n -ErrorAction SilentlyContinue',
@@ -708,7 +741,7 @@ if ($RemoveStore -eq 'no' -or $AddStore -eq 'yes') {
             '    } catch {}',
             '}',
             '',
-            'Start-Process -FilePath "wsreset.exe" -WindowStyle Hidden -ErrorAction SilentlyContinue'
+            'Start-Process -FilePath "wsreset.exe" -ArgumentList "-i" -WindowStyle Hidden -ErrorAction SilentlyContinue'
         )
         Set-Content -LiteralPath $firstBootPs1 -Value $ps1Lines -Encoding UTF8 -Force
 
