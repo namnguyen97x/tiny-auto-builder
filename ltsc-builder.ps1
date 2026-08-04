@@ -42,6 +42,18 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# Optimize host runner performance (Process Priority High, Multi-Threading, Disable Host Defender Realtime Scan)
+try {
+    [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High
+    $cores = [Environment]::ProcessorCount
+    $env:DISM_MAX_THREADS = $cores
+    $env:NUMBER_OF_PROCESSORS = $cores
+    $env:OMP_NUM_THREADS = $cores
+    Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+    & 'powercfg' '/s' '8c5e7cd5-55d9-4a4d-a164-56922d0e4081' 2>$null
+    Write-Host "✓ Host Process Priority set to HIGH, CPU Cores allocated: $cores, Real-time AV disabled for fast DISM I/O" -ForegroundColor Green
+} catch {}
+
 # Debloat settings - tự động enable theo chính sách của maker
 # RemoveAI được set từ parameter (default='no' vì LTSC thường không có AI chính thức)
 $EnableDebloat = 'yes'

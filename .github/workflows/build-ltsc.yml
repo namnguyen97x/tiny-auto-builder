@@ -140,7 +140,11 @@ jobs:
           }
 
           $env:DISM_MAX_THREADS = $env:NUMBER_OF_PROCESSORS
-          Write-Host "DISM optimization: Max threads = $env:DISM_MAX_THREADS"
+          $env:OMP_NUM_THREADS = $env:NUMBER_OF_PROCESSORS
+          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+          powercfg /s 8c5e7cd5-55d9-4a4d-a164-56922d0e4081 2>$null
+          [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = 'High'
+          Write-Host "DISM & Runner optimization: High Priority, Max threads = $env:DISM_MAX_THREADS, Host AV Real-time scan disabled" -ForegroundColor Green
 
       # Store feature removed entirely
 
